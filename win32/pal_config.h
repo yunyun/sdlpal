@@ -68,3 +68,5 @@
 
 PAL_C_LINKAGE char* stoupper(char* s);
 #define strcasestr(a,b) strstr(stoupper((a)),stoupper((b)))
+
+#include <stdbool.h>

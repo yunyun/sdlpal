@@ -39,6 +39,15 @@ static SDL_Texture       *gpTouchOverlay     = NULL;
 static SDL_Rect           gOverlayRect;
 static SDL_Rect           gTextureRect;
 #endif
+static uint32_t gProgramId;
+//static uint32_t gVBOId;
+//static uint32_t gIBOId;
+static uint32_t gVAOId;
+static int gMVPSlot;
+static int glversion_major, glversion_minor;
+static bool glslEnabled = true;
+static bool coreProfileEnabled = false;
+static SDL_Texture *gpBackBuffer;
 
 // The real screen surface
 static SDL_Surface       *gpScreenReal       = NULL;
@@ -51,6 +60,231 @@ static BOOL bScaleScreen = PAL_SCALE_SCREEN;
 static WORD               g_wShakeTime       = 0;
 static WORD               g_wShakeLevel      = 0;
 
+#if __IOS__
+#include <SDL_opengles.h>
+#include <SDL_opengles2.h>
+#define glGenVertexArrays glGenVertexArraysOES
+#define glBindVertexArray glBindVertexArrayOES
+#else
+#ifdef __APPLE__
+#define GL_GLEXT_PROTOTYPES
+#endif
+#include <SDL_opengl.h>
+#endif
+
+#ifndef __APPLE__
+
+// I'm avoiding the use of GLEW or some extensions handler, but that 
+// doesn't mean you should...
+PFNGLCREATESHADERPROC glCreateShader;
+PFNGLSHADERSOURCEPROC glShaderSource;
+PFNGLCOMPILESHADERPROC glCompileShader;
+PFNGLGETSHADERIVPROC glGetShaderiv;
+PFNGLGETSHADERINFOLOGPROC glGetShaderInfoLog;
+PFNGLDELETESHADERPROC glDeleteShader;
+PFNGLATTACHSHADERPROC glAttachShader;
+PFNGLCREATEPROGRAMPROC glCreateProgram;
+PFNGLLINKPROGRAMPROC glLinkProgram;
+PFNGLVALIDATEPROGRAMPROC glValidateProgram;
+PFNGLGETPROGRAMIVPROC glGetProgramiv;
+PFNGLGETPROGRAMINFOLOGPROC glGetProgramInfoLog;
+PFNGLUSEPROGRAMPROC glUseProgram;
+PFNGLGENVERTEXARRAYSPROC glGenVertexArrays;
+PFNGLBINDVERTEXARRAYPROC glBindVertexArray;
+PFNGLGENBUFFERSPROC glGenBuffers;
+PFNGLBINDBUFFERPROC glBindBuffer;
+PFNGLBUFFERDATAPROC glBufferData;
+PFNGLBUFFERSUBDATAPROC glBufferSubData;
+PFNGLGETATTRIBLOCATIONPROC glGetAttribLocation;
+PFNGLENABLEVERTEXATTRIBARRAYPROC glEnableVertexAttribArray;
+PFNGLVERTEXATTRIBPOINTERPROC glVertexAttribPointer;
+PFNGLUNIFORMMATRIX4FVPROC glUniformMatrix4fv;
+PFNGLGETUNIFORMLOCATIONPROC glGetUniformLocation;
+PFNGLBINDFRAGDATALOCATIONPROC glBindFragDataLocation;
+
+int initGLExtensions() {
+	glCreateShader = (PFNGLCREATESHADERPROC)SDL_GL_GetProcAddress("glCreateShader");
+	glShaderSource = (PFNGLSHADERSOURCEPROC)SDL_GL_GetProcAddress("glShaderSource");
+	glCompileShader = (PFNGLCOMPILESHADERPROC)SDL_GL_GetProcAddress("glCompileShader");
+	glGetShaderiv = (PFNGLGETSHADERIVPROC)SDL_GL_GetProcAddress("glGetShaderiv");
+	glGetShaderInfoLog = (PFNGLGETSHADERINFOLOGPROC)SDL_GL_GetProcAddress("glGetShaderInfoLog");
+	glDeleteShader = (PFNGLDELETESHADERPROC)SDL_GL_GetProcAddress("glDeleteShader");
+	glAttachShader = (PFNGLATTACHSHADERPROC)SDL_GL_GetProcAddress("glAttachShader");
+	glCreateProgram = (PFNGLCREATEPROGRAMPROC)SDL_GL_GetProcAddress("glCreateProgram");
+	glLinkProgram = (PFNGLLINKPROGRAMPROC)SDL_GL_GetProcAddress("glLinkProgram");
+	glValidateProgram = (PFNGLVALIDATEPROGRAMPROC)SDL_GL_GetProcAddress("glValidateProgram");
+	glGetProgramiv = (PFNGLGETPROGRAMIVPROC)SDL_GL_GetProcAddress("glGetProgramiv");
+	glGetProgramInfoLog = (PFNGLGETPROGRAMINFOLOGPROC)SDL_GL_GetProcAddress("glGetProgramInfoLog");
+	glUseProgram = (PFNGLUSEPROGRAMPROC)SDL_GL_GetProcAddress("glUseProgram");
+	glGenVertexArrays = (PFNGLGENVERTEXARRAYSPROC)SDL_GL_GetProcAddress("glGenVertexArrays");
+	glBindVertexArray = (PFNGLBINDVERTEXARRAYPROC)SDL_GL_GetProcAddress("glBindVertexArray");
+	glGenBuffers = (PFNGLGENBUFFERSPROC)SDL_GL_GetProcAddress("glGenBuffers");
+	glBindBuffer = (PFNGLBINDBUFFERPROC)SDL_GL_GetProcAddress("glBindBuffer");
+	glBufferData = (PFNGLBUFFERDATAPROC)SDL_GL_GetProcAddress("glBufferData");
+	glBufferSubData = (PFNGLBUFFERSUBDATAPROC)SDL_GL_GetProcAddress("glBufferSubData");
+	glGetAttribLocation = (PFNGLGETATTRIBLOCATIONPROC)SDL_GL_GetProcAddress("glGetAttribLocation");
+	glEnableVertexAttribArray = (PFNGLENABLEVERTEXATTRIBARRAYPROC)SDL_GL_GetProcAddress("glEnableVertexAttribArray");
+	glVertexAttribPointer = (PFNGLVERTEXATTRIBPOINTERPROC)SDL_GL_GetProcAddress("glVertexAttribPointer");
+    glUniformMatrix4fv = (PFNGLUNIFORMMATRIX4FVPROC)SDL_GL_GetProcAddress("glUniformMatrix4fv");
+    glGetUniformLocation = (PFNGLGETUNIFORMLOCATIONPROC)SDL_GL_GetProcAddress("glGetUniformLocation");
+    glBindFragDataLocation = (PFNGLBINDFRAGDATALOCATIONPROC)SDL_GL_GetProcAddress("glBindFragDataLocation") ;
+
+	return glCreateShader && glShaderSource && glCompileShader && glGetShaderiv && 
+		glGetShaderInfoLog && glDeleteShader && glAttachShader && glCreateProgram &&
+		glLinkProgram && glValidateProgram && glGetProgramiv && glGetProgramInfoLog &&
+		glUseProgram && glGenVertexArrays && glBindVertexArray && glGenBuffers &&
+        glBindBuffer && glBufferData && glBufferSubData && glGetAttribLocation &&
+        glEnableVertexAttribArray && glVertexAttribPointer && glUniformMatrix4fv;
+}
+
+#endif
+
+#define GetError( )\
+{\
+for ( GLenum Error = glGetError( ); ( GL_NO_ERROR != Error ); Error = glGetError( ) )\
+{\
+switch ( Error )\
+{\
+case GL_INVALID_ENUM:      UTIL_LogOutput(LOGLEVEL_DEBUG,  "\n%s\n\n", "GL_INVALID_ENUM"      ); assert( 0 ); break;\
+case GL_INVALID_VALUE:     UTIL_LogOutput(LOGLEVEL_DEBUG,  "\n%s\n\n", "GL_INVALID_VALUE"     ); assert( 0 ); break;\
+case GL_INVALID_OPERATION: UTIL_LogOutput(LOGLEVEL_DEBUG,  "\n%s\n\n", "GL_INVALID_OPERATION" ); assert( 0 ); break;\
+case GL_OUT_OF_MEMORY:     UTIL_LogOutput(LOGLEVEL_DEBUG,  "\n%s\n\n", "GL_OUT_OF_MEMORY"     ); assert( 0 ); break;\
+default:                                                                              break;\
+}\
+}\
+}
+struct LTexCoord
+{
+    GLfloat s;
+    GLfloat t;
+};
+struct LVertexPos2D
+{
+    GLfloat x;
+    GLfloat y;
+};
+struct LVertexData2D
+{
+    struct LVertexPos2D position;
+    struct LTexCoord texCoord;
+};
+#pragma pack(push,16)
+union _GLKMatrix4
+{
+    struct
+    {
+        float m00, m01, m02, m03;
+        float m10, m11, m12, m13;
+        float m20, m21, m22, m23;
+        float m30, m31, m32, m33;
+    };
+    float m[16];
+};
+#pragma pack(pop)
+typedef union _GLKMatrix4 GLKMatrix4;
+
+static GLKMatrix4 gOrthoMat;
+
+GLKMatrix4 GLKMatrix4MakeOrtho(float left, float right,
+                                          float bottom, float top,
+                                          float nearZ, float farZ)
+{
+    float ral = right + left;
+    float rsl = right - left;
+    float tab = top + bottom;
+    float tsb = top - bottom;
+    float fan = farZ + nearZ;
+    float fsn = farZ - nearZ;
+    
+    GLKMatrix4 m = { 2.0f / rsl, 0.0f, 0.0f, 0.0f,
+        0.0f, 2.0f / tsb, 0.0f, 0.0f,
+        0.0f, 0.0f, -2.0f / fsn, 0.0f,
+        -ral / rsl, -tab / tsb, -fan / fsn, 1.0f };
+    
+    return m;
+}
+GLuint compileShader(const char* source, GLuint shaderType) {
+    // Create ID for shader
+    GLuint result = glCreateShader(shaderType);
+    // Define shader text
+    glShaderSource(result, 1, &source, NULL);
+    // Compile shader
+    glCompileShader(result);
+    
+    //Check vertex shader for errors
+    GLint shaderCompiled = GL_FALSE;
+    glGetShaderiv( result, GL_COMPILE_STATUS, &shaderCompiled );
+    if( shaderCompiled != GL_TRUE ) {
+        GLint logLength;
+        glGetShaderiv(result, GL_INFO_LOG_LENGTH, &logLength);
+        if (logLength > 0)
+        {
+            GLchar *log = (GLchar*)malloc(logLength);
+            glGetShaderInfoLog(result, logLength, &logLength, log);
+            UTIL_LogOutput(LOGLEVEL_DEBUG, "shader compilation error:%s\r\n",log);
+            free(log);
+        }
+        glDeleteShader(result);
+        result = 0;
+    }
+    return result;
+}
+
+char g_ShaderBuffer[65536];
+char *readShaderFile(const char *fileName, GLuint type) {
+    memset(g_ShaderBuffer,0,sizeof(g_ShaderBuffer));
+    FILE *fp = UTIL_OpenRequiredFile(fileName);
+#ifndef __IOS__
+    sprintf(g_ShaderBuffer,"%s\r\n",glversion_major>3 ? "#version 330" : "#version 110");
+#endif
+    switch(type) {
+        case GL_VERTEX_SHADER:
+            sprintf(g_ShaderBuffer,"%s#define %s\r\n",g_ShaderBuffer,"VERTEX");
+            break;
+        case GL_FRAGMENT_SHADER:
+            sprintf(g_ShaderBuffer,"%s#define %s\r\n",g_ShaderBuffer,"FRAGMENT");
+            break;
+    }
+    fread(g_ShaderBuffer+strlen(g_ShaderBuffer),1,sizeof(g_ShaderBuffer),fp);
+    return g_ShaderBuffer;
+}
+
+GLuint compileProgram(const char* vtxFile, const char* fragFile) {
+    GLuint programId = 0;
+    GLuint vtxShaderId, fragShaderId;
+    programId = glCreateProgram();
+    
+    vtxShaderId = compileShader(readShaderFile(vtxFile,GL_VERTEX_SHADER), GL_VERTEX_SHADER);
+    
+    fragShaderId = compileShader(readShaderFile(fragFile, GL_FRAGMENT_SHADER), GL_FRAGMENT_SHADER);
+    
+    if(vtxShaderId && fragShaderId) {
+        // Associate shader with program
+        glAttachShader(programId, vtxShaderId);
+        glAttachShader(programId, fragShaderId);
+        glLinkProgram(programId);
+        glValidateProgram(programId);
+        
+        // Check the status of the compile/link
+        GLint logLen;
+        glGetProgramiv(programId, GL_INFO_LOG_LENGTH, &logLen);
+        if(logLen > 0) {
+            char* log = (char*) malloc(logLen * sizeof(char));
+            // Show any errors as appropriate
+            glGetProgramInfoLog(programId, logLen, &logLen, log);
+            UTIL_LogOutput(LOGLEVEL_DEBUG, "shader linkage error:%s\r\n",log);
+            free(log);
+        }
+    }
+    if(vtxShaderId) {
+        glDeleteShader(vtxShaderId);
+    }
+    if(fragShaderId) {
+        glDeleteShader(fragShaderId);
+    }
+    return programId;
+}
+
 #if SDL_VERSION_ATLEAST(2, 0, 0)
 #define SDL_SoftStretch SDL_UpperBlit
 static SDL_Texture *VIDEO_CreateTexture(int width, int height)
@@ -58,10 +292,12 @@ static SDL_Texture *VIDEO_CreateTexture(int width, int height)
 	int texture_width, texture_height;
 	float ratio = (float)width / (float)height;
 	ratio *= 1.6f * (float)gConfig.dwAspectY / (float)gConfig.dwAspectX;
+    
+    gOrthoMat = GLKMatrix4MakeOrtho(0, width,height, 0,  -1, 1);
 	//
 	// Check whether to keep the aspect ratio
 	//
-	if (gConfig.fKeepAspectRatio && fabs(ratio - 1.6f) > FLT_EPSILON)
+	if (gConfig.fKeepAspectRatio && fabs(ratio - 1.6f) > DBL_EPSILON)
 	{
 		if (ratio > 1.6f)
 		{
@@ -129,12 +365,20 @@ VIDEO_Startup(
 {
 #if SDL_VERSION_ATLEAST(2,0,0)
    int render_w, render_h;
+   if(glslEnabled) {
+      SDL_SetHint( SDL_HINT_RENDER_DRIVER, "opengl");
+      if(coreProfileEnabled) {
+         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+      }
+   }
 
-   //
+    //
    // Before we can render anything, we need a window and a renderer.
    //
    gpWindow = SDL_CreateWindow("Pal", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-                               gConfig.dwScreenWidth, gConfig.dwScreenHeight, PAL_VIDEO_INIT_FLAGS | (gConfig.fFullScreen ? SDL_WINDOW_BORDERLESS : 0) );
+                               gConfig.dwScreenWidth, gConfig.dwScreenHeight, PAL_VIDEO_INIT_FLAGS | (gConfig.fFullScreen ? SDL_WINDOW_BORDERLESS : 0) | SDL_WINDOW_OPENGL);
    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, gConfig.pszScaleQuality);
 
    if (gpWindow == NULL)
@@ -143,8 +387,75 @@ VIDEO_Startup(
    }
 
    gpRenderer = SDL_CreateRenderer(gpWindow, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+   if(glslEnabled){
+      gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_RGBA8888,                                                  SDL_TEXTUREACCESS_TARGET, gConfig.dwScreenWidth, gConfig.dwScreenHeight);
+      SDL_RendererInfo rendererInfo;
+      SDL_GetRendererInfo(gpRenderer, &rendererInfo);
+      
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "render info:%s\r\n",rendererInfo.name);
+      if(!strncmp(rendererInfo.name, "opengl", 6)) {
+#ifndef __APPLE__
+         // If you want to use GLEW or some other GL extension handler, do it here!
+         if (!initGLExtensions()) {
+            UTIL_LogOutput(LOGLEVEL_DEBUG,  "Couldn't init GL extensions!\r\n" );
+            SDL_Quit();
+            exit(-1);
+         }
+#endif
+      }
+      char *glversion = glGetString(GL_VERSION);
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_VERSION:%s\r\n",glversion);
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_SHADING_LANGUAGE_VERSION:%s\r\n",glGetString(GL_SHADING_LANGUAGE_VERSION));
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_RENDERER:%s\r\n",glGetString(GL_RENDERER));
+      SDL_sscanf(glversion, "%d.%d", &glversion_major, &glversion_minor);
+      
+      struct LVertexData2D vData[ 4 ];
+      GLuint iData[ 4 ];
+      GLuint vbo, ebo;
+      //Set rendering indices
+      iData[ 0 ] = 0;
+      iData[ 1 ] = 1;
+      iData[ 2 ] = 3;
+      iData[ 3 ] = 2;
+      // Initialize vertex array object
+      glGenVertexArrays(1, &gVAOId);
+      glBindVertexArray(gVAOId);
+      gProgramId = compileProgram("crt.glsl","crt.glsl");
+      
+      //Create VBO
+      glGenBuffers( 1, &vbo );
+      glBindBuffer( GL_ARRAY_BUFFER, vbo );
+      glBufferData( GL_ARRAY_BUFFER, 4 * sizeof(struct LVertexData2D), vData, GL_DYNAMIC_DRAW );
+      
+      //Create IBO
+      glGenBuffers( 1, &ebo );
+      glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, ebo );
+      glBufferData( GL_ELEMENT_ARRAY_BUFFER, 4 * sizeof(GLuint), iData, GL_DYNAMIC_DRAW );
+      
+      int slot = glGetAttribLocation(gProgramId, "position");
+      if(slot >= 0) {
+         glEnableVertexAttribArray(slot);
+         glVertexAttribPointer(slot, 2, GL_FLOAT, GL_FALSE, sizeof(struct LVertexData2D), (GLvoid*)offsetof(struct LVertexData2D, position));
+      }else{
+         UTIL_LogOutput(LOGLEVEL_DEBUG, "attrib position not exist\r\n");
+      }
+      
+      slot = glGetAttribLocation(gProgramId, "texcoord");
+      if(slot >= 0) {
+         glEnableVertexAttribArray(slot);
+         glVertexAttribPointer(slot, 2, GL_FLOAT, GL_FALSE, sizeof(struct LVertexData2D), (GLvoid*)offsetof(struct LVertexData2D, texCoord));
+      }else{
+         UTIL_LogOutput(LOGLEVEL_DEBUG, "attrib texcoord not exist\r\n");
+      }
+      
+      gMVPSlot = glGetUniformLocation(gProgramId, "MVPMatrix");
+      if(gMVPSlot < 0)
+         UTIL_LogOutput(LOGLEVEL_DEBUG, "uniform MVPMatrix not exist\r\n");
 
-   if (gpRenderer == NULL)
+//      glBindFragDataLocation(gProgramId, 0, "FragColor");
+   }
+
+    if (gpRenderer == NULL)
    {
       return -1;
    }
@@ -300,6 +611,12 @@ VIDEO_Shutdown(
    }
    gpTexture = NULL;
 
+   if (gpBackBuffer)
+   {
+      SDL_DestroyTexture(gpBackBuffer);
+   }
+   gpBackBuffer = NULL;
+
    if (gpRenderer)
    {
       SDL_DestroyRenderer(gpRenderer);
@@ -327,6 +644,83 @@ VIDEO_Shutdown(
 }
 
 #if SDL_VERSION_ATLEAST(2,0,0)
+
+void presentBackBuffer(SDL_Renderer *renderer, SDL_Window* win, SDL_Texture* backBuffer) {
+    GLint oldProgramId;
+    // Guarrada para obtener el textureid (en drivertexture)
+    //Detach the texture
+    SDL_SetRenderTarget(renderer, NULL);
+    SDL_RenderClear(renderer);
+    
+    SDL_GL_BindTexture(backBuffer, NULL, NULL);
+    if(gProgramId != 0) {
+        glGetIntegerv(GL_CURRENT_PROGRAM,&oldProgramId);
+        glUseProgram(gProgramId);
+    }
+    
+    GLfloat minx, miny, maxx, maxy;
+    GLfloat minu, maxu, minv, maxv;
+    
+    int w,h;
+    SDL_GetWindowSize(win,&w,&h);
+    
+    // Coordenadas de la ventana donde pintar.
+    minx = 0.0f;
+    miny = 0.0f;
+    maxx = w;
+    maxy = h;
+    
+    minu = 0.0f;
+    maxu = 1.0f;
+    minv = 0.0f;
+    maxv = 1.0f;
+//    glBegin(GL_QUADS);
+//    glTexCoord2f(minu, minv);
+//    glVertex2f(minx, miny);
+//    glTexCoord2f(maxu, minv);
+//    glVertex2f(maxx, miny);
+//    glTexCoord2f(maxu, maxv);
+//    glVertex2f(maxx, maxy);
+//    glTexCoord2f(minu, maxv);
+//    glVertex2f(minx, maxy);
+//    glEnd();
+
+    //Set vertex data
+    struct LVertexData2D vData[ 4 ];
+
+    //Texture coordinates
+    vData[ 0 ].texCoord.s =  minu; vData[ 0 ].texCoord.t = minv;
+    vData[ 1 ].texCoord.s =  maxu; vData[ 1 ].texCoord.t = minv;
+    vData[ 2 ].texCoord.s =  maxu; vData[ 2 ].texCoord.t = maxv;
+    vData[ 3 ].texCoord.s =  minu; vData[ 3 ].texCoord.t = maxv;
+
+    //Vertex positions
+    vData[ 0 ].position.x = minx; vData[ 0 ].position.y = miny;
+    vData[ 1 ].position.x = maxx; vData[ 1 ].position.y = miny;
+    vData[ 2 ].position.x = maxx; vData[ 2 ].position.y = maxy;
+    vData[ 3 ].position.x = minx; vData[ 3 ].position.y = maxy;
+
+    // Setup MVP projection matrix uniform
+    
+    glUniformMatrix4fv(gMVPSlot, 1, GL_FALSE, gOrthoMat.m);
+
+    glBindVertexArray(gVAOId);
+
+    //Update vertex buffer data
+    glBufferSubData( GL_ARRAY_BUFFER, 0, 4 * sizeof(struct LVertexData2D), vData );
+
+    //Draw quad using vertex data and index data
+    glDrawElements( GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_INT, NULL );
+//    glDrawArrays(GL_QUADS, 0,4);
+    
+    glBindVertexArray(0);
+
+    if(gProgramId != 0) {
+        glUseProgram(oldProgramId);
+    }
+   SDL_GL_SwapWindow(gpWindow);
+}
+
 PAL_FORCE_INLINE
 VOID
 VIDEO_RenderCopy(
@@ -351,12 +745,20 @@ VIDEO_RenderCopy(
 	memset(pixels, 0, gTextureRect.y * texture_pitch);
 	SDL_UnlockTexture(gpTexture);
 
+    if(glslEnabled){
+       SDL_SetRenderTarget(gpRenderer, gpBackBuffer);
+       SDL_RenderClear(gpRenderer);
+    }
 	SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
 	if (gpTouchOverlay)
 	{
 		SDL_RenderCopy(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect);
 	}
+    if(!glslEnabled){
 	SDL_RenderPresent(gpRenderer);
+    }else{
+       presentBackBuffer(gpRenderer, gpWindow, gpBackBuffer);
+    }
 }
 #endif
 
@@ -577,8 +979,13 @@ VIDEO_Resize(
    {
       SDL_DestroyTexture(gpTexture);
    }
+   if (gpBackBuffer)
+   {
+      SDL_DestroyTexture(gpBackBuffer);
+   }
 
    gpTexture = VIDEO_CreateTexture(w, h);
+   gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_RGBA8888,                                                  SDL_TEXTUREACCESS_TARGET, w, h);
 
    if (gpTexture == NULL)
    {

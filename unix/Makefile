@@ -52,7 +52,7 @@ CCFLAGS = `$(SDL_CONFIG) --cflags` -D_GNU_SOURCE -g -Wall -O2 -fno-strict-aliasi
 	-I../liboggvorbis/src -DPAL_HAS_PLATFORM_SPECIFIC_UTILS $(TEST_CCFLAGS) $(GENERATED)
 CXXFLAGS = $(CCFLAGS) -std=c++11 $(FLTK_CXXFLAGS)
 CFLAGS = $(CCFLAGS) -std=gnu99 $(FLTK_CFLAGS)
-LDFLAGS = `$(SDL_CONFIG) --libs` $(FLTK_LDFLAGS) $(MIDI_LDFLAGS) -lstdc++ -lm -pthread
+LDFLAGS = `$(SDL_CONFIG) --libs` $(FLTK_LDFLAGS) $(MIDI_LDFLAGS) -lstdc++ -lm -pthread -lGL
 TEST_CXXFLAGS += -isystem $(GTEST_DIR)/include -I $(GTEST_DIR) -g -Wall -Wextra -pthread
 
 POSTCOMPILE = @mv -f $*$(INTER).Td $*$(INTER).d && touch $@
