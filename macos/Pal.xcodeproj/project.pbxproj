@@ -114,6 +114,7 @@
 		C63DF68B1EC50B7300C778B8 /* util.mm in Sources */ = {isa = PBXBuildFile; fileRef = C63DF68A1EC50B7300C778B8 /* util.mm */; };
 		C65BC11D1CFAF1780037E9A2 /* overlay.c in Sources */ = {isa = PBXBuildFile; fileRef = C65BC11C1CFAF1780037E9A2 /* overlay.c */; };
 		C65BC11F1CFAF7790037E9A2 /* audio.c in Sources */ = {isa = PBXBuildFile; fileRef = C65BC11E1CFAF7790037E9A2 /* audio.c */; };
+		C6972640202E155C00293A73 /* OpenGL.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C697263C202E155C00293A73 /* OpenGL.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -396,6 +397,7 @@
 		C63DF68A1EC50B7300C778B8 /* util.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; path = util.mm; sourceTree = "<group>"; };
 		C65BC11C1CFAF1780037E9A2 /* overlay.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = overlay.c; sourceTree = "<group>"; };
 		C65BC11E1CFAF7790037E9A2 /* audio.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = audio.c; sourceTree = "<group>"; };
+		C697263C202E155C00293A73 /* OpenGL.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = OpenGL.framework; path = System/Library/Frameworks/OpenGL.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -403,6 +405,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C6972640202E155C00293A73 /* OpenGL.framework in Frameworks */,
 				C63505D41EB4633000186049 /* Carbon.framework in Frameworks */,
 				C63505D31EB4631100186049 /* ForceFeedback.framework in Frameworks */,
 				C63505CD1EB462D600186049 /* CoreVideo.framework in Frameworks */,
@@ -528,6 +531,7 @@
 		29B97323FDCFA39411CA2CEA /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				C697263C202E155C00293A73 /* OpenGL.framework */,
 				C63505D21EB4631100186049 /* ForceFeedback.framework */,
 				C63505D01EB4630200186049 /* Carbon.framework */,
 				C63505CE1EB462EB00186049 /* CoreFoundation.framework */,

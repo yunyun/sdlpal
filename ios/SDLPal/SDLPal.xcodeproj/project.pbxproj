@@ -385,6 +385,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				71655292195BBCD6006E1227 /* OpenGLES.framework in Frameworks */,
 				C6E974A21E49C24500F76B17 /* libSDL2.a in Frameworks */,
 				C622BE761E474CFC000C8970 /* AVFoundation.framework in Frameworks */,
 				C622BE721E474CD5000C8970 /* CoreMotion.framework in Frameworks */,
@@ -392,7 +393,6 @@
 				716552B0195BBECE006E1227 /* QuartzCore.framework in Frameworks */,
 				716552AE195BBE7D006E1227 /* AudioToolbox.framework in Frameworks */,
 				716552AA195BBE1B006E1227 /* CoreAudio.framework in Frameworks */,
-				71655292195BBCD6006E1227 /* OpenGLES.framework in Frameworks */,
 				71655061195BB372006E1227 /* UIKit.framework in Frameworks */,
 				71655063195BB372006E1227 /* Foundation.framework in Frameworks */,
 				71655065195BB372006E1227 /* CoreGraphics.framework in Frameworks */,

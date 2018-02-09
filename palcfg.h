@@ -46,6 +46,7 @@ typedef enum tagPALCFG_ITEM
 	PALCFG_ENABLEKEYREPEAT,
 	PALCFG_USETOUCHOVERLAY,
 	PALCFG_ENABLEAVIPLAY,
+	PALCFG_ENABLEGLSL,
 	/* Booleans */
 	PALCFG_BOOLEAN_MAX,
 
@@ -81,8 +82,10 @@ typedef enum tagPALCFG_ITEM
 	PALCFG_LOGFILE,
 	PALCFG_RIXEXTRAINIT,
 	PALCFG_MIDICLIENT,
-    PALCFG_SCALEQUALITY,
-    PALCFG_ASPECTRATIO,
+	PALCFG_SCALEQUALITY,
+	PALCFG_ASPECTRATIO,
+	PALCFG_VERTEXSHADER,
+	PALCFG_FRAGMENTSHADER,
 	/* Strings */
 	PALCFG_STRING_MAX,
 
@@ -171,7 +174,9 @@ typedef struct tagCONFIGURATION
 	char            *pszFontFile;
 	char            *pszMIDIClient;
 	char            *pszLogFile;
-    char            *pszScaleQuality;
+	char            *pszScaleQuality;
+	char            *pszVertexShader;
+	char            *pszFragmentShader;
 	DWORD            dwWordLength;
 	DWORD            dwScreenWidth;
 	DWORD            dwScreenHeight;
@@ -199,6 +204,7 @@ typedef struct tagCONFIGURATION
 	BOOL             fEnableKeyRepeat;
 	BOOL             fUseTouchOverlay;
 	BOOL             fEnableAviPlay;
+	BOOL             fEnableGLSL;
 #if USE_RIX_EXTRA_INIT
 	uint32_t        *pExtraFMRegs;
 	uint8_t         *pExtraFMVals;

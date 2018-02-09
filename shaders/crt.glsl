@@ -1,20 +1,62 @@
 #if defined(VERTEX)
+#if __VERSION__ >= 130
+#define COMPAT_VARYING out
+#define COMPAT_ATTRIBUTE in
+#define COMPAT_TEXTURE texture
+#else
+#define COMPAT_VARYING varying
+#define COMPAT_ATTRIBUTE attribute
+#define COMPAT_TEXTURE texture2D
+#endif
+
+#ifdef GL_ES
+#define COMPAT_PRECISION mediump
+#else
+#define COMPAT_PRECISION
+#endif
 uniform mat4 MVPMatrix;
 
-attribute vec2 position;
-attribute vec2 texcoord;
+COMPAT_ATTRIBUTE vec2 position;
+COMPAT_ATTRIBUTE vec2 texcoord;
 
-varying vec2 v_texCoord;
-//varying vec4 v_color;
+COMPAT_VARYING vec2 v_texCoord;
+COMPAT_VARYING vec4 v_fragCoord;
 
 void main()
 {
     gl_Position = MVPMatrix * vec4(position,0.0,1.0);
-    //v_color = gl_Color;
+    vec4 normalizedPosition = gl_Position/gl_Position.w;
+    mat4 ndcBiasMatrix = mat4( 0.5, 0.0, 0.0, 0.0,  
+                                 0.0, 0.5, 0.0, 0.0,  
+                                 0.0, 0.0, 0.5, 0.0,  
+                                 0.5, 0.5, 0.5, 1.0 );
+	v_fragCoord = ndcBiasMatrix * normalizedPosition;
     v_texCoord = texcoord;
 }
 
 #elif defined(FRAGMENT)
+
+#if __VERSION__ >= 130
+#define COMPAT_VARYING in
+#define COMPAT_TEXTURE texture
+out vec4 FragColor;
+#else
+#define COMPAT_VARYING varying
+#define FragColor gl_FragColor
+#define COMPAT_TEXTURE texture2D
+#endif
+
+#ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+#define COMPAT_PRECISION mediump
+#else
+#define COMPAT_PRECISION
+#endif
+
 //
 // PUBLIC DOMAIN CRT STYLED SCAN-LINE SHADER
 //
@@ -31,7 +73,8 @@ void main()
 //
 
 //varying vec4 v_color;
-varying vec2 v_texCoord;
+COMPAT_VARYING vec2 v_texCoord;
+COMPAT_VARYING vec4 v_fragCoord;
 
 uniform sampler2D tex0;
 
@@ -73,7 +116,7 @@ vec3 ToSrgb(vec3 c){return vec3(ToSrgb1(c.r),ToSrgb1(c.g),ToSrgb1(c.b));}
 vec3 Fetch(vec2 pos,vec2 off){
     pos=floor(pos*res+off)/res;
     if(max(abs(pos.x-0.5),abs(pos.y-0.5))>0.5)return vec3(0.0,0.0,0.0);
-    return ToLinear(texture2D(tex0,pos.xy,-16.0).rgb);}
+    return ToLinear(COMPAT_TEXTURE(tex0,pos.xy,-16.0).rgb);}
 
 // Distance in emulated pixels to nearest texel.
 vec2 Dist(vec2 pos){pos=pos*res;return -((pos-floor(pos))-vec2(0.5));}
@@ -152,9 +195,13 @@ void main(){
     // Unmodified.
     vec2 pos=Warp(v_texCoord);
     vec4 fragColor;
-    fragColor.rgb=Tri(pos)*Mask(gl_FragCoord.xy);
+    fragColor.rgb=Tri(pos)*Mask(v_fragCoord.xy);
     fragColor.rgb=ToSrgb(fragColor.rgb);
-    gl_FragColor=vec4(fragColor.rgb, 1.0);
+#if defined(IS_IOS) || defined(IS_ANDROID)
+    FragColor=vec4(fragColor.bgr, 1.0);
+#else
+    FragColor=vec4(fragColor.rgb, 1.0);
+#endif
 }
 
 #endif

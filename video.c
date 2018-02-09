@@ -22,6 +22,8 @@
 #include <float.h>
 #include "main.h"
 
+#define PAL_HAS_GLSL 1
+
 // Screen buffer
 SDL_Surface              *gpScreen           = NULL;
 
@@ -39,15 +41,6 @@ static SDL_Texture       *gpTouchOverlay     = NULL;
 static SDL_Rect           gOverlayRect;
 static SDL_Rect           gTextureRect;
 #endif
-static uint32_t gProgramId;
-//static uint32_t gVBOId;
-//static uint32_t gIBOId;
-static uint32_t gVAOId;
-static int gMVPSlot;
-static int glversion_major, glversion_minor;
-static bool glslEnabled = true;
-static bool coreProfileEnabled = false;
-static SDL_Texture *gpBackBuffer;
 
 // The real screen surface
 static SDL_Surface       *gpScreenReal       = NULL;
@@ -60,9 +53,22 @@ static BOOL bScaleScreen = PAL_SCALE_SCREEN;
 static WORD               g_wShakeTime       = 0;
 static WORD               g_wShakeLevel      = 0;
 
+#define ENABLE_OPENGL_CORE_PROFILE 1
+
+#if PAL_HAS_GLSL
+static uint32_t gProgramId;
+static uint32_t gVAOIds[2]; // 0 for whole screen; 1 for touch overlay
+static uint32_t gVBOIds[2];
+//static uint32_t gIBOId;
+static int gMVPSlot;
+static int glversion_major, glversion_minor;
+static SDL_Texture *gpBackBuffer;
+
 #if __IOS__
 #include <SDL_opengles.h>
 #include <SDL_opengles2.h>
+#include <OpenGLES/ES3/gl.h>
+#include <OpenGLES/ES3/glext.h>
 #define glGenVertexArrays glGenVertexArraysOES
 #define glBindVertexArray glBindVertexArrayOES
 #else
@@ -101,6 +107,7 @@ PFNGLVERTEXATTRIBPOINTERPROC glVertexAttribPointer;
 PFNGLUNIFORMMATRIX4FVPROC glUniformMatrix4fv;
 PFNGLGETUNIFORMLOCATIONPROC glGetUniformLocation;
 PFNGLBINDFRAGDATALOCATIONPROC glBindFragDataLocation;
+PFNGLGETSTRINGIPROC glGetStringi;
 
 int initGLExtensions() {
 	glCreateShader = (PFNGLCREATESHADERPROC)SDL_GL_GetProcAddress("glCreateShader");
@@ -128,6 +135,7 @@ int initGLExtensions() {
     glUniformMatrix4fv = (PFNGLUNIFORMMATRIX4FVPROC)SDL_GL_GetProcAddress("glUniformMatrix4fv");
     glGetUniformLocation = (PFNGLGETUNIFORMLOCATIONPROC)SDL_GL_GetProcAddress("glGetUniformLocation");
     glBindFragDataLocation = (PFNGLBINDFRAGDATALOCATIONPROC)SDL_GL_GetProcAddress("glBindFragDataLocation") ;
+   glGetStringi = (PFNGLGETSTRINGIPROC)SDL_GL_GetProcAddress("glGetStringi") ;
 
 	return glCreateShader && glShaderSource && glCompileShader && glGetShaderiv && 
 		glGetShaderInfoLog && glDeleteShader && glAttachShader && glCreateProgram &&
@@ -234,7 +242,11 @@ char g_ShaderBuffer[65536];
 char *readShaderFile(const char *fileName, GLuint type) {
     memset(g_ShaderBuffer,0,sizeof(g_ShaderBuffer));
     FILE *fp = UTIL_OpenRequiredFile(fileName);
-#ifndef __IOS__
+#if __IOS__
+    sprintf(g_ShaderBuffer,"#define IS_IOS 1\r\n");
+#elif __ANDROID__
+    sprintf(g_ShaderBuffer,"#define IS_ANDROID 1\r\n");
+#else
     sprintf(g_ShaderBuffer,"%s\r\n",glversion_major>3 ? "#version 330" : "#version 110");
 #endif
     switch(type) {
@@ -285,6 +297,132 @@ GLuint compileProgram(const char* vtxFile, const char* fragFile) {
     return programId;
 }
 
+void VAO_Draw(SDL_Renderer * renderer, SDL_Texture * texture, const SDL_Rect * srcrect, const SDL_Rect * dstrect, int vaoId)
+{
+   GLfloat minx, miny, maxx, maxy;
+   GLfloat minu, maxu, minv, maxv;
+   
+//   glEnable(GL_TEXTURE_2D);
+   SDL_GL_BindTexture(texture, NULL, NULL);
+   glColor4f(1.0,1.0,1.0,1.0);
+//   glDisable(GL_BLEND);
+   
+   SDL_Rect _srcrect,_dstrect;
+   
+   int w, h;
+   SDL_QueryTexture(texture, NULL, NULL, &w, &h);
+   
+   int render_w,render_h;
+   SDL_GetRendererOutputSize(gpRenderer, &render_w, &render_h);
+   
+   if(!srcrect) {
+      srcrect = &_srcrect;
+      _srcrect.x = 0;
+      _srcrect.y = 0;
+      _srcrect.w = w;
+      _srcrect.h = h;
+   }
+   if(!dstrect) {
+      dstrect = &_dstrect;
+      _dstrect.x = 0;
+      _dstrect.y = 0;
+      _dstrect.w = render_w;
+      _dstrect.h = render_h;
+   }
+   
+   minx = dstrect->x;
+   miny = dstrect->y;
+   maxx = dstrect->x + dstrect->w;
+   maxy = dstrect->y + dstrect->h;
+   
+   minu = (GLfloat) srcrect->x / w;
+   //   minu *= texturedata->texw;
+   maxu = (GLfloat) (srcrect->x + w) / w;
+   //   maxu *= texturedata->texw;
+   minv = (GLfloat) srcrect->y / h;
+   //   minv *= texturedata->texh;
+   maxv = (GLfloat) (srcrect->y + h) / h;
+   //   maxv *= texturedata->texh;
+   
+   struct LVertexData2D vData[ 4 ];
+   
+   //Texture coordinates
+   vData[ 0 ].texCoord.s =  minu; vData[ 0 ].texCoord.t = minv;
+   vData[ 1 ].texCoord.s =  maxu; vData[ 1 ].texCoord.t = minv;
+   vData[ 2 ].texCoord.s =  maxu; vData[ 2 ].texCoord.t = maxv;
+   vData[ 3 ].texCoord.s =  minu; vData[ 3 ].texCoord.t = maxv;
+   
+   //Vertex positions
+   vData[ 0 ].position.x = minx; vData[ 0 ].position.y = miny;
+   vData[ 1 ].position.x = maxx; vData[ 1 ].position.y = miny;
+   vData[ 2 ].position.x = maxx; vData[ 2 ].position.y = maxy;
+   vData[ 3 ].position.x = minx; vData[ 3 ].position.y = maxy;
+   
+   glBindVertexArray(gVAOIds[vaoId]);
+   
+   //Update vertex buffer data
+//   glBindBuffer( GL_ARRAY_BUFFER, gVBOIds[vaoId] );
+   glBufferSubData( GL_ARRAY_BUFFER, 0, 4 * sizeof(struct LVertexData2D), vData );
+   
+   //Draw quad using vertex data and index data
+   glDrawElements( GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_INT, NULL );
+   //    glDrawArrays(GL_QUADS, 0,4);
+   
+   glBindVertexArray(0);
+}
+
+void presentBackBuffer(SDL_Renderer * renderer, SDL_Texture* backBuffer) {
+   GLint oldProgramId;
+
+   //Detach the texture
+   SDL_SetRenderTarget(renderer, NULL);
+   SDL_RenderClear(renderer);
+   
+   SDL_GL_BindTexture(backBuffer, NULL, NULL);
+   if(gProgramId != 0) {
+      glGetIntegerv(GL_CURRENT_PROGRAM,&oldProgramId);
+      glUseProgram(gProgramId);
+   }
+
+   // Setup MVP projection matrix uniform
+   glUniformMatrix4fv(gMVPSlot, 1, GL_FALSE, gOrthoMat.m);
+   
+   VAO_Draw(gpRenderer, backBuffer, NULL,NULL,0);
+   
+   if(gProgramId != 0) {
+      glUseProgram(oldProgramId);
+   }
+}
+
+//remove all fixed pipeline call in RenderCopy
+
+int CORE_SetupCopy(SDL_Renderer * renderer, SDL_Texture * texture)
+{
+   //setup shader
+   return 0;
+}
+
+int orig_SDL_RenderCopy(SDL_Renderer * renderer, SDL_Texture * texture,
+                    const SDL_Rect * srcrect, const SDL_Rect * dstrect)
+{
+   return SDL_RenderCopy(renderer, texture, srcrect, dstrect);
+}
+#define SDL_RenderCopy CORE_RenderCopy
+int CORE_RenderCopy(SDL_Renderer * renderer, SDL_Texture * texture,
+                    const SDL_Rect * srcrect, const SDL_Rect * dstrect)
+{
+#if ENABLE_OPENGL_CORE_PROFILE
+   if(!gConfig.fEnableGLSL)
+#endif
+      return orig_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
+
+   VAO_Draw(renderer, texture, srcrect, dstrect, 1);
+   
+   return 0;//GL_CheckError("", renderer);
+}
+
+#endif //PAL_HAS_GLSL
+
 #if SDL_VERSION_ATLEAST(2, 0, 0)
 #define SDL_SoftStretch SDL_UpperBlit
 static SDL_Texture *VIDEO_CreateTexture(int width, int height)
@@ -292,8 +430,10 @@ static SDL_Texture *VIDEO_CreateTexture(int width, int height)
 	int texture_width, texture_height;
 	float ratio = (float)width / (float)height;
 	ratio *= 1.6f * (float)gConfig.dwAspectY / (float)gConfig.dwAspectX;
-    
+   
+#if PAL_HAS_GLSL
     gOrthoMat = GLKMatrix4MakeOrtho(0, width,height, 0,  -1, 1);
+#endif
 	//
 	// Check whether to keep the aspect ratio
 	//
@@ -365,14 +505,19 @@ VIDEO_Startup(
 {
 #if SDL_VERSION_ATLEAST(2,0,0)
    int render_w, render_h;
-   if(glslEnabled) {
-      SDL_SetHint( SDL_HINT_RENDER_DRIVER, "opengl");
-      if(coreProfileEnabled) {
-         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
-         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-      }
+   
+#if !__IOS__ && !__ANDROID__
+#  if PAL_HAS_GLSL
+   if( gConfig.fEnableGLSL) {
+   SDL_SetHint( SDL_HINT_RENDER_DRIVER, "opengl");
+#     if ENABLE_OPENGL_CORE_PROFILE
+   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+#     endif
    }
+#  endif
+#endif
 
     //
    // Before we can render anything, we need a window and a renderer.
@@ -387,44 +532,53 @@ VIDEO_Startup(
    }
 
    gpRenderer = SDL_CreateRenderer(gpWindow, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-   if(glslEnabled){
-      gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_RGBA8888,                                                  SDL_TEXTUREACCESS_TARGET, gConfig.dwScreenWidth, gConfig.dwScreenHeight);
+#  if PAL_HAS_GLSL
+   if( gConfig.fEnableGLSL) {
+      gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, gConfig.dwScreenWidth, gConfig.dwScreenHeight);
       SDL_RendererInfo rendererInfo;
       SDL_GetRendererInfo(gpRenderer, &rendererInfo);
       
       UTIL_LogOutput(LOGLEVEL_DEBUG, "render info:%s\r\n",rendererInfo.name);
       if(!strncmp(rendererInfo.name, "opengl", 6)) {
-#ifndef __APPLE__
+#     ifndef __APPLE__
          // If you want to use GLEW or some other GL extension handler, do it here!
          if (!initGLExtensions()) {
             UTIL_LogOutput(LOGLEVEL_DEBUG,  "Couldn't init GL extensions!\r\n" );
             SDL_Quit();
             exit(-1);
          }
-#endif
+#     endif
       }
-      char *glversion = glGetString(GL_VERSION);
+      char *glversion = (char*)glGetString(GL_VERSION);
       UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_VERSION:%s\r\n",glversion);
       UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_SHADING_LANGUAGE_VERSION:%s\r\n",glGetString(GL_SHADING_LANGUAGE_VERSION));
       UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_RENDERER:%s\r\n",glGetString(GL_RENDERER));
       SDL_sscanf(glversion, "%d.%d", &glversion_major, &glversion_minor);
-      
+      if( glversion_major >= 3 ) {
+         GLint n, i;
+         glGetIntegerv(GL_NUM_EXTENSIONS, &n);
+         for (i = 0; i < n; i++) {
+            UTIL_LogOutput(LOGLEVEL_DEBUG, "extension %d:%s\n", i, glGetStringi(GL_EXTENSIONS, i));
+         }
+      }else
+         UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_EXTENSIONS:%s\r\n",glGetString(GL_EXTENSIONS));
+
       struct LVertexData2D vData[ 4 ];
       GLuint iData[ 4 ];
-      GLuint vbo, ebo;
+      GLuint ebo;
       //Set rendering indices
       iData[ 0 ] = 0;
       iData[ 1 ] = 1;
       iData[ 2 ] = 3;
       iData[ 3 ] = 2;
       // Initialize vertex array object
-      glGenVertexArrays(1, &gVAOId);
-      glBindVertexArray(gVAOId);
-      gProgramId = compileProgram("crt.glsl","crt.glsl");
+      glGenVertexArrays(2, gVAOIds);
+      glBindVertexArray(gVAOIds[0]);
+      gProgramId = compileProgram(gConfig.pszVertexShader,gConfig.pszFragmentShader);
       
       //Create VBO
-      glGenBuffers( 1, &vbo );
-      glBindBuffer( GL_ARRAY_BUFFER, vbo );
+      glGenBuffers( 2, gVBOIds );
+      glBindBuffer( GL_ARRAY_BUFFER, gVBOIds[0] );
       glBufferData( GL_ARRAY_BUFFER, 4 * sizeof(struct LVertexData2D), vData, GL_DYNAMIC_DRAW );
       
       //Create IBO
@@ -452,18 +606,30 @@ VIDEO_Startup(
       if(gMVPSlot < 0)
          UTIL_LogOutput(LOGLEVEL_DEBUG, "uniform MVPMatrix not exist\r\n");
 
-//      glBindFragDataLocation(gProgramId, 0, "FragColor");
+#if !__IOS__ && !__ANDROID__
+      glBindFragDataLocation(gProgramId, 0, "FragColor");
+#endif
+      
+//      glBindVertexArray(gVAOIds[1]);
+//      glBindBuffer( GL_ARRAY_BUFFER, gVBOIds[1] );
+//      glBufferData( GL_ARRAY_BUFFER, 4 * sizeof(struct LVertexData2D), vData, GL_DYNAMIC_DRAW );
+////      glGenBuffers( 1, &ebo );
+//      glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, ebo );
+////      glBufferData( GL_ELEMENT_ARRAY_BUFFER, 4 * sizeof(GLuint), iData, GL_DYNAMIC_DRAW );
+
+      glBindVertexArray(0);
    }
+#  endif //PAL_HAS_GLSL
 
     if (gpRenderer == NULL)
    {
       return -1;
    }
 
-#if defined (__IOS__)
+#  if defined (__IOS__)
    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
    SDL_GL_SetAttribute(SDL_GL_RETAINED_BACKING, 1);
-#endif
+#  endif
 
    //
    // Create the screen buffer and the backup screen buffer.
@@ -611,11 +777,13 @@ VIDEO_Shutdown(
    }
    gpTexture = NULL;
 
+#if PAL_HAS_GLSL
    if (gpBackBuffer)
    {
       SDL_DestroyTexture(gpBackBuffer);
    }
    gpBackBuffer = NULL;
+#endif
 
    if (gpRenderer)
    {
@@ -645,82 +813,6 @@ VIDEO_Shutdown(
 
 #if SDL_VERSION_ATLEAST(2,0,0)
 
-void presentBackBuffer(SDL_Renderer *renderer, SDL_Window* win, SDL_Texture* backBuffer) {
-    GLint oldProgramId;
-    // Guarrada para obtener el textureid (en drivertexture)
-    //Detach the texture
-    SDL_SetRenderTarget(renderer, NULL);
-    SDL_RenderClear(renderer);
-    
-    SDL_GL_BindTexture(backBuffer, NULL, NULL);
-    if(gProgramId != 0) {
-        glGetIntegerv(GL_CURRENT_PROGRAM,&oldProgramId);
-        glUseProgram(gProgramId);
-    }
-    
-    GLfloat minx, miny, maxx, maxy;
-    GLfloat minu, maxu, minv, maxv;
-    
-    int w,h;
-    SDL_GetWindowSize(win,&w,&h);
-    
-    // Coordenadas de la ventana donde pintar.
-    minx = 0.0f;
-    miny = 0.0f;
-    maxx = w;
-    maxy = h;
-    
-    minu = 0.0f;
-    maxu = 1.0f;
-    minv = 0.0f;
-    maxv = 1.0f;
-//    glBegin(GL_QUADS);
-//    glTexCoord2f(minu, minv);
-//    glVertex2f(minx, miny);
-//    glTexCoord2f(maxu, minv);
-//    glVertex2f(maxx, miny);
-//    glTexCoord2f(maxu, maxv);
-//    glVertex2f(maxx, maxy);
-//    glTexCoord2f(minu, maxv);
-//    glVertex2f(minx, maxy);
-//    glEnd();
-
-    //Set vertex data
-    struct LVertexData2D vData[ 4 ];
-
-    //Texture coordinates
-    vData[ 0 ].texCoord.s =  minu; vData[ 0 ].texCoord.t = minv;
-    vData[ 1 ].texCoord.s =  maxu; vData[ 1 ].texCoord.t = minv;
-    vData[ 2 ].texCoord.s =  maxu; vData[ 2 ].texCoord.t = maxv;
-    vData[ 3 ].texCoord.s =  minu; vData[ 3 ].texCoord.t = maxv;
-
-    //Vertex positions
-    vData[ 0 ].position.x = minx; vData[ 0 ].position.y = miny;
-    vData[ 1 ].position.x = maxx; vData[ 1 ].position.y = miny;
-    vData[ 2 ].position.x = maxx; vData[ 2 ].position.y = maxy;
-    vData[ 3 ].position.x = minx; vData[ 3 ].position.y = maxy;
-
-    // Setup MVP projection matrix uniform
-    
-    glUniformMatrix4fv(gMVPSlot, 1, GL_FALSE, gOrthoMat.m);
-
-    glBindVertexArray(gVAOId);
-
-    //Update vertex buffer data
-    glBufferSubData( GL_ARRAY_BUFFER, 0, 4 * sizeof(struct LVertexData2D), vData );
-
-    //Draw quad using vertex data and index data
-    glDrawElements( GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_INT, NULL );
-//    glDrawArrays(GL_QUADS, 0,4);
-    
-    glBindVertexArray(0);
-
-    if(gProgramId != 0) {
-        glUseProgram(oldProgramId);
-    }
-   SDL_GL_SwapWindow(gpWindow);
-}
-
 PAL_FORCE_INLINE
 VOID
 VIDEO_RenderCopy(
@@ -745,22 +837,33 @@ VIDEO_RenderCopy(
 	memset(pixels, 0, gTextureRect.y * texture_pitch);
 	SDL_UnlockTexture(gpTexture);
 
-    if(glslEnabled){
-       SDL_SetRenderTarget(gpRenderer, gpBackBuffer);
-       SDL_RenderClear(gpRenderer);
-    }
-	SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
-	if (gpTouchOverlay)
-	{
-		SDL_RenderCopy(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect);
-	}
-    if(!glslEnabled){
-	SDL_RenderPresent(gpRenderer);
-    }else{
-       presentBackBuffer(gpRenderer, gpWindow, gpBackBuffer);
+#if PAL_HAS_GLSL
+//    if( gConfig.fEnableGLSL) {
+//        SDL_SetRenderTarget(gpRenderer, gpBackBuffer);
+//        SDL_RenderClear(gpRenderer);
+//    }
+#endif
+//   SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
+//   if (gpTouchOverlay)
+//   {
+//      SDL_RenderCopy(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect);
+//   }
+#if PAL_HAS_GLSL
+    if( gConfig.fEnableGLSL) {
+       presentBackBuffer(gpRenderer, gpTexture);
+       SDL_GL_SwapWindow(gpWindow);
+    }else
+#endif
+    {
+       SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
+       if (gpTouchOverlay)
+       {
+          SDL_RenderCopy(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect);
+       }
+       SDL_RenderPresent(gpRenderer);
     }
 }
-#endif
+#endif //SDL2
 
 VOID
 VIDEO_UpdateScreen(
@@ -979,13 +1082,16 @@ VIDEO_Resize(
    {
       SDL_DestroyTexture(gpTexture);
    }
+
+   gpTexture = VIDEO_CreateTexture(w, h);
+   
+#if PAL_HAS_GLSL
    if (gpBackBuffer)
    {
       SDL_DestroyTexture(gpBackBuffer);
    }
-
-   gpTexture = VIDEO_CreateTexture(w, h);
-   gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_RGBA8888,                                                  SDL_TEXTUREACCESS_TARGET, w, h);
+   gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_ARGB8888,                                                  SDL_TEXTUREACCESS_TARGET, w, h);
+#endif
 
    if (gpTexture == NULL)
    {

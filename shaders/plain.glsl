@@ -54,7 +54,7 @@ uniform sampler2D tex0;
 
 void main()
 {
-	vec4 fragColor = vec4(COMPAT_TEXTURE(tex0 , v_texCoord.xy).bgr, 1.0);
+	vec4 fragColor = vec4(COMPAT_TEXTURE(tex0 , v_texCoord.xy).rgb, 1.0);
 #if defined(IS_IOS) || defined(IS_ANDROID)
     FragColor=vec4(fragColor.bgr, 1.0);
 #else
