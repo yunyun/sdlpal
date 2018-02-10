@@ -16,15 +16,15 @@
 #endif
 uniform mat4 MVPMatrix;
 
-COMPAT_ATTRIBUTE vec2 position;
-COMPAT_ATTRIBUTE vec2 texcoord;
+COMPAT_ATTRIBUTE vec4 VertexCoord;
+COMPAT_ATTRIBUTE vec4 TexCoord;
 
 COMPAT_VARYING vec2 v_texCoord;
 
 void main()
 {
-    gl_Position = MVPMatrix * vec4(position,0.0,1.0);
-    v_texCoord = texcoord;
+    gl_Position = MVPMatrix * VertexCoord;
+    v_texCoord = TexCoord.xy;
 }
 #elif defined(FRAGMENT)
 #if __VERSION__ >= 130

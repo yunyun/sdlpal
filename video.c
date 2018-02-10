@@ -51,14 +51,14 @@ static BOOL bScaleScreen = PAL_SCALE_SCREEN;
 static WORD               g_wShakeTime       = 0;
 static WORD               g_wShakeLevel      = 0;
 
-#define ENABLE_OPENGL_CORE_PROFILE 1
+//#define FORCE_OPENGL_CORE_PROFILE 1
 
 #if PAL_HAS_GLSL
 static uint32_t gProgramId;
 static uint32_t gVAOIds[2]; // 0 for whole screen; 1 for touch overlay
 static uint32_t gVBOIds[2];
 //static uint32_t gIBOId;
-static int gMVPSlot;
+static int gMVPSlot, gTextureSizeSlot;
 static int glversion_major, glversion_minor;
 static SDL_Texture *gpBackBuffer;
 
@@ -76,7 +76,11 @@ static SDL_Texture *gpBackBuffer;
 #include <SDL_opengl.h>
 #endif
 
-#ifndef __APPLE__
+#if __IOS__ || __ANDROID__ || __EMSCRIPTEN__
+#define GLES 1
+#endif
+
+#if !defined(__APPLE__)
 
 // I'm avoiding the use of GLEW or some extensions handler, but that 
 // doesn't mean you should...
@@ -103,6 +107,7 @@ PFNGLGETATTRIBLOCATIONPROC glGetAttribLocation;
 PFNGLENABLEVERTEXATTRIBARRAYPROC glEnableVertexAttribArray;
 PFNGLVERTEXATTRIBPOINTERPROC glVertexAttribPointer;
 PFNGLUNIFORMMATRIX4FVPROC glUniformMatrix4fv;
+PFNGLUNIFORM2FVPROC glUniform2fv;
 PFNGLGETUNIFORMLOCATIONPROC glGetUniformLocation;
 PFNGLBINDFRAGDATALOCATIONPROC glBindFragDataLocation;
 PFNGLGETSTRINGIPROC glGetStringi;
@@ -131,9 +136,12 @@ int initGLExtensions() {
 	glEnableVertexAttribArray = (PFNGLENABLEVERTEXATTRIBARRAYPROC)SDL_GL_GetProcAddress("glEnableVertexAttribArray");
 	glVertexAttribPointer = (PFNGLVERTEXATTRIBPOINTERPROC)SDL_GL_GetProcAddress("glVertexAttribPointer");
     glUniformMatrix4fv = (PFNGLUNIFORMMATRIX4FVPROC)SDL_GL_GetProcAddress("glUniformMatrix4fv");
+    glUniform2fv = (PFNGLUNIFORM2FVPROC)SDL_GL_GetProcAddress("glUniform2fv");
     glGetUniformLocation = (PFNGLGETUNIFORMLOCATIONPROC)SDL_GL_GetProcAddress("glGetUniformLocation");
+#if !GLES
     glBindFragDataLocation = (PFNGLBINDFRAGDATALOCATIONPROC)SDL_GL_GetProcAddress("glBindFragDataLocation") ;
     glGetStringi = (PFNGLGETSTRINGIPROC)SDL_GL_GetProcAddress("glGetStringi") ;
+#endif
 
 	return glCreateShader && glShaderSource && glCompileShader && glGetShaderiv && 
 		glGetShaderInfoLog && glDeleteShader && glAttachShader && glCreateProgram &&
@@ -159,20 +167,24 @@ default:                                                                        
 }\
 }\
 }
-struct LTexCoord
+struct AttrTexCoord
 {
     GLfloat s;
     GLfloat t;
+    GLfloat u;
+    GLfloat v;
 };
-struct LVertexPos2D
+struct AttrVertexPos
 {
     GLfloat x;
     GLfloat y;
+    GLfloat z;
+    GLfloat w;
 };
-struct LVertexData2D
+struct VertexDataFormat
 {
-    struct LVertexPos2D position;
-    struct LTexCoord texCoord;
+    struct AttrVertexPos position;
+    struct AttrTexCoord texCoord;
 };
 #pragma pack(push,16)
 union _GLKMatrix4
@@ -210,6 +222,7 @@ GLKMatrix4 GLKMatrix4MakeOrtho(float left, float right,
     return m;
 }
 GLuint compileShader(const char* source, GLuint shaderType) {
+   UTIL_LogOutput(LOGLEVEL_DEBUG, "compiling %s shader: source:\r\n%s", shaderType == GL_VERTEX_SHADER ? "Vertex" : "Fragment", source );
     // Create ID for shader
     GLuint result = glCreateShader(shaderType);
     // Define shader text
@@ -232,7 +245,8 @@ GLuint compileShader(const char* source, GLuint shaderType) {
         }
         glDeleteShader(result);
         result = 0;
-    }
+    }else
+       UTIL_LogOutput(LOGLEVEL_DEBUG, "%s shader compilation finished success!", shaderType == GL_VERTEX_SHADER ? "Vertex" : "Fragment" );
     return result;
 }
 
@@ -240,11 +254,7 @@ char g_ShaderBuffer[65536];
 char *readShaderFile(const char *fileName, GLuint type) {
     memset(g_ShaderBuffer,0,sizeof(g_ShaderBuffer));
     FILE *fp = UTIL_OpenRequiredFile(fileName);
-#if __IOS__
-    sprintf(g_ShaderBuffer,"#define IS_IOS 1\r\n");
-#elif __ANDROID__
-    sprintf(g_ShaderBuffer,"#define IS_ANDROID 1\r\n");
-#else
+#if !GLES
     sprintf(g_ShaderBuffer,"%s\r\n",glversion_major>3 ? "#version 330" : "#version 110");
 #endif
     switch(type) {
@@ -284,7 +294,8 @@ GLuint compileProgram(const char* vtxFile, const char* fragFile) {
             glGetProgramInfoLog(programId, logLen, &logLen, log);
             UTIL_LogOutput(LOGLEVEL_DEBUG, "shader linkage error:%s\r\n",log);
             free(log);
-        }
+        }else
+           UTIL_LogOutput(LOGLEVEL_DEBUG, "shaders linkage finished success!");
     }
     if(vtxShaderId) {
         glDeleteShader(vtxShaderId);
@@ -302,7 +313,7 @@ void VAO_Draw(SDL_Renderer * renderer, SDL_Texture * texture, const SDL_Rect * s
    
 //   glEnable(GL_TEXTURE_2D);
    SDL_GL_BindTexture(texture, NULL, NULL);
-   glColor4f(1.0,1.0,1.0,1.0);
+//   glColor4f(1.0,1.0,1.0,1.0);
 //   glDisable(GL_BLEND);
    
    SDL_Rect _srcrect,_dstrect;
@@ -342,25 +353,25 @@ void VAO_Draw(SDL_Renderer * renderer, SDL_Texture * texture, const SDL_Rect * s
    maxv = (GLfloat) (srcrect->y + h) / h;
    //   maxv *= texturedata->texh;
    
-   struct LVertexData2D vData[ 4 ];
+   struct VertexDataFormat vData[ 4 ];
    
    //Texture coordinates
-   vData[ 0 ].texCoord.s =  minu; vData[ 0 ].texCoord.t = minv;
-   vData[ 1 ].texCoord.s =  maxu; vData[ 1 ].texCoord.t = minv;
-   vData[ 2 ].texCoord.s =  maxu; vData[ 2 ].texCoord.t = maxv;
-   vData[ 3 ].texCoord.s =  minu; vData[ 3 ].texCoord.t = maxv;
+   vData[ 0 ].texCoord.s =  minu; vData[ 0 ].texCoord.t = minv; vData[ 0 ].texCoord.u = 0.0; vData[ 0 ].texCoord.v = 0.0;
+   vData[ 1 ].texCoord.s =  maxu; vData[ 1 ].texCoord.t = minv; vData[ 1 ].texCoord.u = 0.0; vData[ 1 ].texCoord.v = 0.0;
+   vData[ 2 ].texCoord.s =  maxu; vData[ 2 ].texCoord.t = maxv; vData[ 2 ].texCoord.u = 0.0; vData[ 2 ].texCoord.v = 0.0;
+   vData[ 3 ].texCoord.s =  minu; vData[ 3 ].texCoord.t = maxv; vData[ 3 ].texCoord.u = 0.0; vData[ 3 ].texCoord.v = 0.0;
    
    //Vertex positions
-   vData[ 0 ].position.x = minx; vData[ 0 ].position.y = miny;
-   vData[ 1 ].position.x = maxx; vData[ 1 ].position.y = miny;
-   vData[ 2 ].position.x = maxx; vData[ 2 ].position.y = maxy;
-   vData[ 3 ].position.x = minx; vData[ 3 ].position.y = maxy;
+   vData[ 0 ].position.x = minx; vData[ 0 ].position.y = miny; vData[ 0 ].position.z = 0.0; vData[ 0 ].position.w = 1.0;
+   vData[ 1 ].position.x = maxx; vData[ 1 ].position.y = miny; vData[ 1 ].position.z = 0.0; vData[ 1 ].position.w = 1.0;
+   vData[ 2 ].position.x = maxx; vData[ 2 ].position.y = maxy; vData[ 2 ].position.z = 0.0; vData[ 2 ].position.w = 1.0;
+   vData[ 3 ].position.x = minx; vData[ 3 ].position.y = maxy; vData[ 3 ].position.z = 0.0; vData[ 3 ].position.w = 1.0;
    
    glBindVertexArray(gVAOIds[vaoId]);
    
    //Update vertex buffer data
 //   glBindBuffer( GL_ARRAY_BUFFER, gVBOIds[vaoId] );
-   glBufferSubData( GL_ARRAY_BUFFER, 0, 4 * sizeof(struct LVertexData2D), vData );
+   glBufferSubData( GL_ARRAY_BUFFER, 0, 4 * sizeof(struct VertexDataFormat), vData );
    
    //Draw quad using vertex data and index data
    glDrawElements( GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_INT, NULL );
@@ -385,6 +396,11 @@ void presentBackBuffer(SDL_Renderer * renderer, SDL_Texture* backBuffer) {
    // Setup MVP projection matrix uniform
    glUniformMatrix4fv(gMVPSlot, 1, GL_FALSE, gOrthoMat.m);
    
+   GLfloat textureSize[2];
+   textureSize[0] = 320.0;
+   textureSize[1] = 200.0;
+   glUniform2fv(gTextureSizeSlot, 1, textureSize);
+
    VAO_Draw(gpRenderer, backBuffer, NULL,NULL,0);
    
    if(gProgramId != 0) {
@@ -409,7 +425,7 @@ int orig_SDL_RenderCopy(SDL_Renderer * renderer, SDL_Texture * texture,
 int CORE_RenderCopy(SDL_Renderer * renderer, SDL_Texture * texture,
                     const SDL_Rect * srcrect, const SDL_Rect * dstrect)
 {
-#if ENABLE_OPENGL_CORE_PROFILE
+#if FORCE_OPENGL_CORE_PROFILE
    if(!gConfig.fEnableGLSL)
 #endif
       return orig_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
@@ -504,11 +520,11 @@ VIDEO_Startup(
 #if SDL_VERSION_ATLEAST(2,0,0)
    int render_w, render_h;
    
-#if !__IOS__ && !__ANDROID__
+#if !GLES
 #  if PAL_HAS_GLSL
    if( gConfig.fEnableGLSL) {
    SDL_SetHint( SDL_HINT_RENDER_DRIVER, "opengl");
-#     if ENABLE_OPENGL_CORE_PROFILE
+#     if FORCE_OPENGL_CORE_PROFILE
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
@@ -561,7 +577,7 @@ VIDEO_Startup(
       }else
          UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_EXTENSIONS:%s\r\n",glGetString(GL_EXTENSIONS));
 
-      struct LVertexData2D vData[ 4 ];
+      struct VertexDataFormat vData[ 4 ];
       GLuint iData[ 4 ];
       GLuint ebo;
       //Set rendering indices
@@ -577,34 +593,38 @@ VIDEO_Startup(
       //Create VBO
       glGenBuffers( 2, gVBOIds );
       glBindBuffer( GL_ARRAY_BUFFER, gVBOIds[0] );
-      glBufferData( GL_ARRAY_BUFFER, 4 * sizeof(struct LVertexData2D), vData, GL_DYNAMIC_DRAW );
+      glBufferData( GL_ARRAY_BUFFER, 4 * sizeof(struct VertexDataFormat), vData, GL_DYNAMIC_DRAW );
       
       //Create IBO
       glGenBuffers( 1, &ebo );
       glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, ebo );
       glBufferData( GL_ELEMENT_ARRAY_BUFFER, 4 * sizeof(GLuint), iData, GL_DYNAMIC_DRAW );
       
-      int slot = glGetAttribLocation(gProgramId, "position");
+      int slot = glGetAttribLocation(gProgramId, "VertexCoord");
       if(slot >= 0) {
          glEnableVertexAttribArray(slot);
-         glVertexAttribPointer(slot, 2, GL_FLOAT, GL_FALSE, sizeof(struct LVertexData2D), (GLvoid*)offsetof(struct LVertexData2D, position));
+         glVertexAttribPointer(slot, 4, GL_FLOAT, GL_FALSE, sizeof(struct VertexDataFormat), (GLvoid*)offsetof(struct VertexDataFormat, position));
       }else{
-         UTIL_LogOutput(LOGLEVEL_DEBUG, "attrib position not exist\r\n");
+         UTIL_LogOutput(LOGLEVEL_DEBUG, "attrib VertexCoord not exist\r\n");
       }
       
-      slot = glGetAttribLocation(gProgramId, "texcoord");
+      slot = glGetAttribLocation(gProgramId, "TexCoord");
       if(slot >= 0) {
          glEnableVertexAttribArray(slot);
-         glVertexAttribPointer(slot, 2, GL_FLOAT, GL_FALSE, sizeof(struct LVertexData2D), (GLvoid*)offsetof(struct LVertexData2D, texCoord));
+         glVertexAttribPointer(slot, 4, GL_FLOAT, GL_FALSE, sizeof(struct VertexDataFormat), (GLvoid*)offsetof(struct VertexDataFormat, texCoord));
       }else{
-         UTIL_LogOutput(LOGLEVEL_DEBUG, "attrib texcoord not exist\r\n");
+         UTIL_LogOutput(LOGLEVEL_DEBUG, "attrib TexCoord not exist\r\n");
       }
       
       gMVPSlot = glGetUniformLocation(gProgramId, "MVPMatrix");
       if(gMVPSlot < 0)
          UTIL_LogOutput(LOGLEVEL_DEBUG, "uniform MVPMatrix not exist\r\n");
 
-#if !__IOS__ && !__ANDROID__
+      gTextureSizeSlot = glGetUniformLocation(gProgramId, "TextureSize");
+      if(gTextureSizeSlot < 0)
+         UTIL_LogOutput(LOGLEVEL_DEBUG, "uniform TextureSize not exist\r\n");
+
+#if !GLES
       glBindFragDataLocation(gProgramId, 0, "FragColor");
 #endif
       

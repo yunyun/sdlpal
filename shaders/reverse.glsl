@@ -16,15 +16,15 @@
 #endif
 uniform mat4 MVPMatrix;
 
-COMPAT_ATTRIBUTE vec2 position;
-COMPAT_ATTRIBUTE vec2 texcoord;
+COMPAT_ATTRIBUTE vec4 VertexCoord;
+COMPAT_ATTRIBUTE vec4 TexCoord;
 
 COMPAT_VARYING vec2 v_texCoord;
 
 void main()
 {
-    gl_Position = MVPMatrix * vec4(position,0.0,1.0);
-    v_texCoord = texcoord;
+    gl_Position = MVPMatrix * VertexCoord;
+    v_texCoord = TexCoord.xy;
 }
 #elif defined(FRAGMENT)
 #if __VERSION__ >= 130
@@ -54,8 +54,8 @@ uniform sampler2D tex0;
 
 void main()
 {
-	vec4 fragColor = vec4(COMPAT_TEXTURE(tex0 , v_texCoord.xy).bgr, 1.0);
-#if defined(IS_IOS) || defined(IS_ANDROID)
+	vec4 fragColor = vec4(1,1,1,1)-vec4(COMPAT_TEXTURE(tex0 , v_texCoord.xy).bgr, 0.0);
+#ifdef GL_ES
     FragColor=vec4(fragColor.bgr, 1.0);
 #else
     FragColor=vec4(fragColor.rgb, 1.0);

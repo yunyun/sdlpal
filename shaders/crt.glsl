@@ -16,22 +16,22 @@
 #endif
 uniform mat4 MVPMatrix;
 
-COMPAT_ATTRIBUTE vec2 position;
-COMPAT_ATTRIBUTE vec2 texcoord;
+COMPAT_ATTRIBUTE vec4 VertexCoord;
+COMPAT_ATTRIBUTE vec4 TexCoord;
 
 COMPAT_VARYING vec2 v_texCoord;
 COMPAT_VARYING vec4 v_fragCoord;
 
 void main()
 {
-    gl_Position = MVPMatrix * vec4(position,0.0,1.0);
+    gl_Position = MVPMatrix * VertexCoord;
     vec4 normalizedPosition = gl_Position/gl_Position.w;
     mat4 ndcBiasMatrix = mat4( 0.5, 0.0, 0.0, 0.0,  
                                  0.0, 0.5, 0.0, 0.0,  
                                  0.0, 0.0, 0.5, 0.0,  
                                  0.5, 0.5, 0.5, 1.0 );
 	v_fragCoord = ndcBiasMatrix * normalizedPosition;
-    v_texCoord = texcoord;
+    v_texCoord = TexCoord.xy;
 }
 
 #elif defined(FRAGMENT)
@@ -197,7 +197,7 @@ void main(){
     vec4 fragColor;
     fragColor.rgb=Tri(pos)*Mask(v_fragCoord.xy);
     fragColor.rgb=ToSrgb(fragColor.rgb);
-#if defined(IS_IOS) || defined(IS_ANDROID)
+#ifdef GL_ES
     FragColor=vec4(fragColor.bgr, 1.0);
 #else
     FragColor=vec4(fragColor.rgb, 1.0);
