@@ -74,4 +74,6 @@ UTIL_ConfigPath(
 
 PAL_C_LINKAGE_END
 
+#define PAL_HAS_GLSL 1
+
 #endif

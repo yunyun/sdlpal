@@ -69,4 +69,6 @@
 PAL_C_LINKAGE char* stoupper(char* s);
 #define strcasestr(a,b) strstr(stoupper((a)),stoupper((b)))
 
+#define PAL_HAS_GLSL 1
+
 #include <stdbool.h>

@@ -59,4 +59,6 @@
 
 #include <sys/time.h>
 
+#define PAL_HAS_GLSL 1
+
 #endif
