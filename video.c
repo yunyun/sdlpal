@@ -51,16 +51,17 @@ static BOOL bScaleScreen = PAL_SCALE_SCREEN;
 static WORD               g_wShakeTime       = 0;
 static WORD               g_wShakeLevel      = 0;
 
-//#define FORCE_OPENGL_CORE_PROFILE 1
+#define FORCE_OPENGL_CORE_PROFILE 1
 
 #if PAL_HAS_GLSL
 static uint32_t gProgramId;
-static uint32_t gVAOIds[2]; // 0 for whole screen; 1 for touch overlay
-static uint32_t gVBOIds[2];
+static uint32_t gVAOId; // 0 for whole screen; 1 for touch overlay
+//static uint32_t gVBOIds[2];
 //static uint32_t gIBOId;
 static int gMVPSlot, gTextureSizeSlot;
 static int glversion_major, glversion_minor;
 static SDL_Texture *gpBackBuffer;
+static int is_SHITEL = 0;
 
 #if __IOS__
 #include <SDL_opengles.h>
@@ -78,6 +79,7 @@ static SDL_Texture *gpBackBuffer;
 
 #if __IOS__ || __ANDROID__ || __EMSCRIPTEN__
 #define GLES 1
+#undef FORCE_OPENGL_CORE_PROFILE
 #endif
 
 #if !defined(__APPLE__)
@@ -221,8 +223,12 @@ GLKMatrix4 GLKMatrix4MakeOrtho(float left, float right,
     
     return m;
 }
-GLuint compileShader(const char* source, GLuint shaderType) {
-   UTIL_LogOutput(LOGLEVEL_DEBUG, "compiling %s shader: source:\r\n%s", shaderType == GL_VERTEX_SHADER ? "Vertex" : "Fragment", source );
+//DONT CHANGE
+#define SHADER_TYPE(shaderType) (shaderType == GL_VERTEX_SHADER ? "VERTEX" : "FRAGMENT")
+char *readShaderFile(const char *fileName, GLuint type);
+GLuint compileShader(const char* fileName, GLuint shaderType) {
+   UTIL_LogOutput(LOGLEVEL_DEBUG, "compiling %s shader %s", SHADER_TYPE(shaderType), fileName );
+    char *source = readShaderFile(fileName, shaderType);
     // Create ID for shader
     GLuint result = glCreateShader(shaderType);
     // Define shader text
@@ -257,14 +263,7 @@ char *readShaderFile(const char *fileName, GLuint type) {
 #if !GLES
     sprintf(g_ShaderBuffer,"%s\r\n",glversion_major>3 ? "#version 330" : "#version 110");
 #endif
-    switch(type) {
-        case GL_VERTEX_SHADER:
-            sprintf(g_ShaderBuffer,"%s#define %s\r\n",g_ShaderBuffer,"VERTEX");
-            break;
-        case GL_FRAGMENT_SHADER:
-            sprintf(g_ShaderBuffer,"%s#define %s\r\n",g_ShaderBuffer,"FRAGMENT");
-            break;
-    }
+    sprintf(g_ShaderBuffer,"%s#define %s\r\n",g_ShaderBuffer,SHADER_TYPE(type));
     fread(g_ShaderBuffer+strlen(g_ShaderBuffer),1,sizeof(g_ShaderBuffer),fp);
     return g_ShaderBuffer;
 }
@@ -274,9 +273,9 @@ GLuint compileProgram(const char* vtxFile, const char* fragFile) {
     GLuint vtxShaderId, fragShaderId;
     programId = glCreateProgram();
     
-    vtxShaderId = compileShader(readShaderFile(vtxFile,GL_VERTEX_SHADER), GL_VERTEX_SHADER);
+    vtxShaderId = compileShader(vtxFile, GL_VERTEX_SHADER);
     
-    fragShaderId = compileShader(readShaderFile(fragFile, GL_FRAGMENT_SHADER), GL_FRAGMENT_SHADER);
+    fragShaderId = compileShader(fragFile, GL_FRAGMENT_SHADER);
     
     if(vtxShaderId && fragShaderId) {
         // Associate shader with program
@@ -346,11 +345,11 @@ void VAO_Draw(SDL_Renderer * renderer, SDL_Texture * texture, const SDL_Rect * s
    
    minu = (GLfloat) srcrect->x / w;
    //   minu *= texturedata->texw;
-   maxu = (GLfloat) (srcrect->x + w) / w;
+   maxu = (GLfloat) (srcrect->x + w) / w / (is_SHITEL ? 1.6 : 1);
    //   maxu *= texturedata->texw;
    minv = (GLfloat) srcrect->y / h;
    //   minv *= texturedata->texh;
-   maxv = (GLfloat) (srcrect->y + h) / h;
+   maxv = (GLfloat) (srcrect->y + h) / h / (is_SHITEL ? 1.28 : 1);
    //   maxv *= texturedata->texh;
    
    struct VertexDataFormat vData[ 4 ];
@@ -367,7 +366,7 @@ void VAO_Draw(SDL_Renderer * renderer, SDL_Texture * texture, const SDL_Rect * s
    vData[ 2 ].position.x = maxx; vData[ 2 ].position.y = maxy; vData[ 2 ].position.z = 0.0; vData[ 2 ].position.w = 1.0;
    vData[ 3 ].position.x = minx; vData[ 3 ].position.y = maxy; vData[ 3 ].position.z = 0.0; vData[ 3 ].position.w = 1.0;
    
-   glBindVertexArray(gVAOIds[vaoId]);
+   glBindVertexArray(gVAOId);
    
    //Update vertex buffer data
 //   glBindBuffer( GL_ARRAY_BUFFER, gVBOIds[vaoId] );
@@ -408,6 +407,7 @@ void presentBackBuffer(SDL_Renderer * renderer, SDL_Texture* backBuffer) {
    }
 }
 
+#if FORCE_OPENGL_CORE_PROFILE
 //remove all fixed pipeline call in RenderCopy
 
 int CORE_SetupCopy(SDL_Renderer * renderer, SDL_Texture * texture)
@@ -434,6 +434,7 @@ int CORE_RenderCopy(SDL_Renderer * renderer, SDL_Texture * texture,
    
    return 0;//GL_CheckError("", renderer);
 }
+#endif //FORCE_OPENGL_CORE_PROFILE
 
 #endif //PAL_HAS_GLSL
 
@@ -576,23 +577,26 @@ VIDEO_Startup(
          }
       }else
          UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_EXTENSIONS:%s\r\n",glGetString(GL_EXTENSIONS));
+#if FORCE_OPENGL_CORE_PROFILE
+       is_SHITEL = (strstr(glversion, "INTEL")!=NULL && strstr(glversion, "WebGL")==NULL);
+#endif
 
       struct VertexDataFormat vData[ 4 ];
       GLuint iData[ 4 ];
-      GLuint ebo;
+      GLuint vbo, ebo;
       //Set rendering indices
       iData[ 0 ] = 0;
       iData[ 1 ] = 1;
       iData[ 2 ] = 3;
       iData[ 3 ] = 2;
       // Initialize vertex array object
-      glGenVertexArrays(2, gVAOIds);
-      glBindVertexArray(gVAOIds[0]);
+      glGenVertexArrays(1, &gVAOId);
+      glBindVertexArray(gVAOId);
       gProgramId = compileProgram(gConfig.pszVertexShader,gConfig.pszFragmentShader);
       
       //Create VBO
-      glGenBuffers( 2, gVBOIds );
-      glBindBuffer( GL_ARRAY_BUFFER, gVBOIds[0] );
+      glGenBuffers( 1, &vbo );
+      glBindBuffer( GL_ARRAY_BUFFER, vbo );
       glBufferData( GL_ARRAY_BUFFER, 4 * sizeof(struct VertexDataFormat), vData, GL_DYNAMIC_DRAW );
       
       //Create IBO
@@ -628,13 +632,6 @@ VIDEO_Startup(
       glBindFragDataLocation(gProgramId, 0, "FragColor");
 #endif
       
-//      glBindVertexArray(gVAOIds[1]);
-//      glBindBuffer( GL_ARRAY_BUFFER, gVBOIds[1] );
-//      glBufferData( GL_ARRAY_BUFFER, 4 * sizeof(struct LVertexData2D), vData, GL_DYNAMIC_DRAW );
-////      glGenBuffers( 1, &ebo );
-//      glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, ebo );
-////      glBufferData( GL_ELEMENT_ARRAY_BUFFER, 4 * sizeof(GLuint), iData, GL_DYNAMIC_DRAW );
-
       glBindVertexArray(0);
    }
 #  endif //PAL_HAS_GLSL
@@ -855,29 +852,39 @@ VIDEO_RenderCopy(
 	memset(pixels, 0, gTextureRect.y * texture_pitch);
 	SDL_UnlockTexture(gpTexture);
 
-#if PAL_HAS_GLSL
-//    if( gConfig.fEnableGLSL) {
-//        SDL_SetRenderTarget(gpRenderer, gpBackBuffer);
-//        SDL_RenderClear(gpRenderer);
-//    }
-#endif
-//   SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
-//   if (gpTouchOverlay)
-//   {
-//      SDL_RenderCopy(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect);
-//   }
+#if !GLES //INVALID_VALUE: bufferSubData: offset out of range
 #if PAL_HAS_GLSL
     if( gConfig.fEnableGLSL) {
-       presentBackBuffer(gpRenderer, gpTexture);
+        SDL_SetRenderTarget(gpRenderer, gpBackBuffer);
+        SDL_RenderClear(gpRenderer);
+    }
+#endif
+   SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
+   if (gpTouchOverlay)
+   {
+      SDL_RenderCopy(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect);
+   }
+#endif
+#if PAL_HAS_GLSL
+    if( gConfig.fEnableGLSL) {
+       presentBackBuffer(gpRenderer,
+#if FORCE_OPENGL_CORE_PROFILE || GLES//need figure howto implement RTT in macOS Core Profile
+                         gpTexture
+#else
+                         gpBackBuffer
+#endif
+                         );
        SDL_GL_SwapWindow(gpWindow);
     }else
 #endif
     {
+#if FORCE_OPENGL_CORE_PROFILE
        SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
        if (gpTouchOverlay)
        {
           SDL_RenderCopy(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect);
        }
+#endif
        SDL_RenderPresent(gpRenderer);
     }
 }
