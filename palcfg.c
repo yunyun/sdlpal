@@ -57,6 +57,8 @@ static const ConfigItem gConfigItems[PALCFG_ALL_MAX] = {
 	{ PALCFG_SOUNDVOLUME,       PALCFG_UNSIGNED, "SoundVolume",       11, MAKE_VALUE(PAL_MAX_VOLUME,                0,                     PAL_MAX_VOLUME) },        // Default for maximum volume
 	{ PALCFG_WINDOWHEIGHT,      PALCFG_UNSIGNED, "WindowHeight",      12, MAKE_VALUE(PAL_DEFAULT_WINDOW_HEIGHT,     0,                     UINT32_MAX) },
 	{ PALCFG_WINDOWWIDTH,       PALCFG_UNSIGNED, "WindowWidth",       11, MAKE_VALUE(PAL_DEFAULT_WINDOW_WIDTH,      0,                     UINT32_MAX) },
+    { PALCFG_TEXTUREHEIGHT,     PALCFG_UNSIGNED, "TextureHeight",     13, MAKE_VALUE(PAL_DEFAULT_TEXTURE_HEIGHT,    0,                     UINT32_MAX) },
+    { PALCFG_TEXTUREWIDTH,      PALCFG_UNSIGNED, "TextureWidth",      12, MAKE_VALUE(PAL_DEFAULT_TEXTURE_WIDTH,     0,                     UINT32_MAX) },
 
 	{ PALCFG_CD,                PALCFG_STRING,   "CD",                 2, MAKE_VALUE("OGG",    NULL, NULL) },
 	{ PALCFG_GAMEPATH,          PALCFG_STRING,   "GamePath",           8, MAKE_VALUE(NULL,     NULL, NULL) },
@@ -69,9 +71,7 @@ static const ConfigItem gConfigItems[PALCFG_ALL_MAX] = {
 	{ PALCFG_RIXEXTRAINIT,      PALCFG_STRING,   "RIXExtraInit",      12, MAKE_VALUE(NULL,     NULL, NULL) },
 	{ PALCFG_MIDICLIENT,        PALCFG_STRING,   "MIDIClient",        10, MAKE_VALUE(NULL,     NULL, NULL) },
     { PALCFG_SCALEQUALITY,      PALCFG_STRING,   "ScaleQuality",      12, MAKE_VALUE("0",      NULL, NULL) },
-    { PALCFG_ASPECTRATIO,       PALCFG_STRING,   "AspectRatio",       11, MAKE_VALUE("16:10",  NULL, NULL) },
-    { PALCFG_VERTEXSHADER,      PALCFG_STRING,   "VertexShader",      12, MAKE_VALUE("",  NULL, NULL) },
-    { PALCFG_FRAGMENTSHADER,    PALCFG_STRING,   "FragmentShader",    14, MAKE_VALUE("",  NULL, NULL) },
+    { PALCFG_SHADER,            PALCFG_STRING,   "Shader",             6, MAKE_VALUE("PLACE YOUR SHADER IN CFG",  NULL, NULL) },
 };
 
 static const char *music_types[] = { "MIDI", "RIX", "MP3", "OGG", "RAW" };
@@ -425,27 +425,8 @@ PAL_LoadConfig(
 				case PALCFG_SCALEQUALITY:
 					gConfig.pszScaleQuality = ParseStringValue(value.sValue, gConfig.pszScaleQuality);
 					break;
-				case PALCFG_ASPECTRATIO:
-				{
-					size_t len = strlen(value.sValue) + 1;
-					char *origAspectRatio = (char*)malloc(len);
-					memset(origAspectRatio, 0, len);
-					strncpy(origAspectRatio, value.sValue, strlen(value.sValue));
-					char *aspectRatio = ParseStringValue(value.sValue, origAspectRatio);
-					char *lasts;
-					if( strchr(aspectRatio,':') == NULL ) {
-						aspectRatio = ParseStringValue(item->DefaultValue.sValue, origAspectRatio);
-					}
-					dwAspectX = atoi(strtok_r(aspectRatio,":",&lasts));
-					dwAspectY = atoi(strtok_r(NULL,       ":",&lasts));
-					free(aspectRatio);
-					break;
-				}
-				case PALCFG_VERTEXSHADER:
-					gConfig.pszVertexShader = ParseStringValue(value.sValue, gConfig.pszVertexShader);
-					break;
-				case PALCFG_FRAGMENTSHADER:
-					gConfig.pszFragmentShader = ParseStringValue(value.sValue, gConfig.pszFragmentShader);
+				case PALCFG_SHADER:
+					gConfig.pszShader = ParseStringValue(value.sValue, gConfig.pszShader);
 					break;
 				default:
 					values[item->Item] = value;
@@ -489,8 +470,8 @@ PAL_LoadConfig(
 	gConfig.iMusicVolume = values[PALCFG_MUSICVOLUME].uValue;
 	gConfig.iSoundVolume = values[PALCFG_SOUNDVOLUME].uValue;
 
-	gConfig.dwAspectX = dwAspectX <= 0 ? 16 : dwAspectX;
-	gConfig.dwAspectY = dwAspectY <= 0 ? 10 : dwAspectY;
+	gConfig.dwTextureWidth  = values[PALCFG_TEXTUREWIDTH].uValue;
+	gConfig.dwTextureHeight = values[PALCFG_TEXTUREHEIGHT].uValue;
 
 	if (UTIL_GetScreenSize(&values[PALCFG_WINDOWWIDTH].uValue, &values[PALCFG_WINDOWHEIGHT].uValue))
 	{
@@ -502,6 +483,9 @@ PAL_LoadConfig(
 		gConfig.dwScreenWidth = PAL_DEFAULT_WINDOW_WIDTH;
 		gConfig.dwScreenHeight = PAL_DEFAULT_WINDOW_HEIGHT;
 	}
+    
+    if(gConfig.fEnableGLSL && !gConfig.pszShader)
+        gConfig.pszShader = values[PALCFG_SHADER].sValue;
 }
 
 
@@ -535,7 +519,9 @@ PAL_SaveConfig(
 		sprintf(buf, "%s=%u\n", PAL_ConfigName(PALCFG_MUSICVOLUME), gConfig.iMusicVolume); fputs(buf, fp);
 		sprintf(buf, "%s=%u\n", PAL_ConfigName(PALCFG_SOUNDVOLUME), gConfig.iSoundVolume); fputs(buf, fp);
 		sprintf(buf, "%s=%u\n", PAL_ConfigName(PALCFG_WINDOWHEIGHT), gConfig.dwScreenHeight); fputs(buf, fp);
-		sprintf(buf, "%s=%u\n", PAL_ConfigName(PALCFG_WINDOWWIDTH), gConfig.dwScreenWidth); fputs(buf, fp);
+        sprintf(buf, "%s=%u\n", PAL_ConfigName(PALCFG_WINDOWWIDTH), gConfig.dwScreenWidth); fputs(buf, fp);
+        sprintf(buf, "%s=%u\n", PAL_ConfigName(PALCFG_TEXTUREHEIGHT), gConfig.dwTextureHeight); fputs(buf, fp);
+        sprintf(buf, "%s=%u\n", PAL_ConfigName(PALCFG_TEXTUREWIDTH), gConfig.dwTextureWidth); fputs(buf, fp);
 
 		sprintf(buf, "%s=%s\n", PAL_ConfigName(PALCFG_CD), music_types[gConfig.eCDType]); fputs(buf, fp);
 		sprintf(buf, "%s=%s\n", PAL_ConfigName(PALCFG_MUSIC), music_types[gConfig.eMusicType]); fputs(buf, fp);
@@ -548,9 +534,7 @@ PAL_SaveConfig(
 		if (gConfig.pszLogFile && *gConfig.pszLogFile) { sprintf(buf, "%s=%s\n", PAL_ConfigName(PALCFG_LOGFILE), gConfig.pszLogFile); fputs(buf, fp); }
 		if (gConfig.pszMIDIClient && *gConfig.pszMIDIClient) { sprintf(buf, "%s=%s\n", PAL_ConfigName(PALCFG_MIDICLIENT), gConfig.pszMIDIClient); fputs(buf, fp); }
 		if (gConfig.pszScaleQuality && *gConfig.pszScaleQuality) { sprintf(buf, "%s=%s\n", PAL_ConfigName(PALCFG_SCALEQUALITY), gConfig.pszScaleQuality); fputs(buf, fp); }
-		if (gConfig.dwAspectX > 0 && gConfig.dwAspectY > 0) { sprintf(buf, "%s=%s\n", PAL_ConfigName(PALCFG_ASPECTRATIO), PAL_va(0,"%d:%d",gConfig.dwAspectX,gConfig.dwAspectY)); fputs(buf, fp); }
-		if (gConfig.pszVertexShader && *gConfig.pszVertexShader) { sprintf(buf, "%s=%s\n", PAL_ConfigName(PALCFG_VERTEXSHADER), gConfig.pszVertexShader); fputs(buf, fp); }
-		if (gConfig.pszFragmentShader && *gConfig.pszFragmentShader) { sprintf(buf, "%s=%s\n", PAL_ConfigName(PALCFG_FRAGMENTSHADER), gConfig.pszFragmentShader); fputs(buf, fp); }
+		if (gConfig.pszShader && *gConfig.pszShader) { sprintf(buf, "%s=%s\n", PAL_ConfigName(PALCFG_SHADER), gConfig.pszShader); fputs(buf, fp); }
 
 		fclose(fp);
 
@@ -599,11 +583,11 @@ PAL_GetConfigItem(
 		case PALCFG_LOGFILE:           value.sValue = gConfig.pszLogFile; break;
 		case PALCFG_MIDICLIENT:        value.sValue = gConfig.pszMIDIClient; break;
 		case PALCFG_SCALEQUALITY:      value.sValue = gConfig.pszScaleQuality; break;
-		case PALCFG_VERTEXSHADER:      value.sValue = gConfig.pszVertexShader; break;
-		case PALCFG_FRAGMENTSHADER:    value.sValue = gConfig.pszFragmentShader; break;
+		case PALCFG_SHADER:            value.sValue = gConfig.pszShader; break;
 		case PALCFG_MUSIC:             value.sValue = music_types[gConfig.eMusicType]; break;
 		case PALCFG_OPL:               value.sValue = opl_types[gConfig.eOPLType]; break;
-        case PALCFG_ASPECTRATIO:       value.sValue = PAL_va(0,"%d:%d",gConfig.dwAspectX,gConfig.dwAspectY); break;
+        case PALCFG_TEXTUREHEIGHT:     value.uValue = gConfig.dwTextureHeight; break;
+        case PALCFG_TEXTUREWIDTH:      value.uValue = gConfig.dwTextureWidth; break;
 		default:                       break;
 		}
 	}
@@ -638,18 +622,8 @@ PAL_SetConfigItem(
 	case PALCFG_SOUNDVOLUME:       gConfig.iSoundVolume = value.uValue; break;
 	case PALCFG_WINDOWHEIGHT:      gConfig.dwScreenHeight = value.uValue; break;
 	case PALCFG_WINDOWWIDTH:       gConfig.dwScreenWidth = value.uValue; break;
-    case PALCFG_ASPECTRATIO:
-    {
-        char *lasts;
-        if( strchr(value.sValue,':') != NULL ) {
-            gConfig.dwAspectX = atoi(strtok_r((char*)value.sValue,":",&lasts));
-            gConfig.dwAspectY = atoi(strtok_r(NULL,               ":",&lasts));
-        }else{
-            gConfig.dwAspectX = 16;
-            gConfig.dwAspectY = 10;
-        }
-        break;
-    }
+    case PALCFG_TEXTUREHEIGHT:     gConfig.dwTextureHeight = value.uValue; break;
+    case PALCFG_TEXTUREWIDTH:      gConfig.dwTextureWidth = value.uValue; break;
 	case PALCFG_GAMEPATH:
 		if (gConfig.pszGamePath) free(gConfig.pszGamePath);
 		gConfig.pszGamePath = value.sValue && value.sValue[0] ? strdup(value.sValue) : strdup(PAL_PREFIX);
@@ -678,13 +652,9 @@ PAL_SetConfigItem(
 		if (gConfig.pszScaleQuality) free(gConfig.pszScaleQuality);
 		gConfig.pszScaleQuality = value.sValue && value.sValue[0] ? strdup(value.sValue) : NULL;
 		break;
-	case PALCFG_VERTEXSHADER:
-		if (gConfig.pszVertexShader) free(gConfig.pszVertexShader);
-		gConfig.pszVertexShader = value.sValue && value.sValue[0] ? strdup(value.sValue) : NULL;
-		break;
-	case PALCFG_FRAGMENTSHADER:
-		if (gConfig.pszFragmentShader) free(gConfig.pszFragmentShader);
-		gConfig.pszFragmentShader = value.sValue && value.sValue[0] ? strdup(value.sValue) : NULL;
+	case PALCFG_SHADER:
+		if (gConfig.pszShader) free(gConfig.pszShader);
+		gConfig.pszShader = value.sValue && value.sValue[0] ? strdup(value.sValue) : NULL;
 		break;
 	case PALCFG_CD:
 		for (int i = 0; i < sizeof(music_types) / sizeof(music_types[0]); i++)

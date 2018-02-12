@@ -38,6 +38,9 @@ static SDL_Texture       *gpTexture          = NULL;
 static SDL_Texture       *gpTouchOverlay     = NULL;
 static SDL_Rect           gOverlayRect;
 static SDL_Rect           gTextureRect;
+static SDL_Rect           gGLTextureRect;
+int gRendererWidth;
+int gRendererHeight;
 #endif
 
 // The real screen surface
@@ -277,6 +280,38 @@ FragColor = vec4(COMPAT_TEXTURE(tex0 , v_texCoord.xy).rgb, 1.0);  \r\n\
 FragColor.rgb = FragColor.bgr;   \r\n\
 #endif                              \r\n\
 }";
+static char *plain_glsl_frag_overlay = "\r\n\
+#if __VERSION__ >= 130              \r\n\
+#define COMPAT_VARYING in           \r\n\
+#define COMPAT_TEXTURE texture      \r\n\
+out vec4 FragColor;                 \r\n\
+#else                               \r\n\
+#define COMPAT_VARYING varying      \r\n\
+#define FragColor gl_FragColor      \r\n\
+#define COMPAT_TEXTURE texture2D    \r\n\
+#endif                              \r\n\
+#ifdef GL_ES                        \r\n\
+#ifdef GL_FRAGMENT_PRECISION_HIGH   \r\n\
+precision highp float;              \r\n\
+#else                               \r\n\
+precision mediump float;            \r\n\
+#endif                              \r\n\
+#define COMPAT_PRECISION mediump    \r\n\
+#else                               \r\n\
+#define COMPAT_PRECISION            \r\n\
+#endif                              \r\n\
+COMPAT_VARYING vec2 v_texCoord;     \r\n\
+uniform sampler2D tex0;             \r\n\
+void main()                         \r\n\
+{                                   \r\n\
+FragColor = vec4(COMPAT_TEXTURE(tex0 , v_texCoord.xy).rgb, 1.0);  \r\n\
+float sat = (FragColor.r+FragColor.g+FragColor.b)/3.0; \r\n\
+vec3 average = vec3(sat,sat,sat);    \r\n\
+FragColor.rgb -= average*0.7;               \r\n\
+#ifdef GL_ES                        \r\n\
+FragColor.rgb = FragColor.rgb;      \r\n\
+#endif                              \r\n\
+}";
 
 char *readShaderFile(const char *fileName, GLuint type) {
    FILE *fp = UTIL_OpenRequiredFile(fileName);
@@ -423,9 +458,6 @@ void VIDEO_RenderTexture(SDL_Renderer * renderer, SDL_Texture * texture, const S
    int w, h;
    SDL_QueryTexture(texture, NULL, NULL, &w, &h);
    
-   int render_w,render_h;
-   SDL_GetRendererOutputSize(gpRenderer, &render_w, &render_h);
-   
    if(!srcrect) {
       srcrect = &_srcrect;
       _srcrect.x = 0;
@@ -437,8 +469,8 @@ void VIDEO_RenderTexture(SDL_Renderer * renderer, SDL_Texture * texture, const S
       dstrect = &_dstrect;
       _dstrect.x = 0;
       _dstrect.y = 0;
-      _dstrect.w = render_w;
-      _dstrect.h = render_h;
+      _dstrect.w = gRendererWidth;
+      _dstrect.h = gRendererHeight;
    }
    
    minx = dstrect->x;
@@ -446,13 +478,14 @@ void VIDEO_RenderTexture(SDL_Renderer * renderer, SDL_Texture * texture, const S
    maxx = dstrect->x + dstrect->w;
    maxy = dstrect->y + dstrect->h;
    
-   minu = (GLfloat) dstrect->x / w;
+   minu = (GLfloat) srcrect->x / srcrect->w;
+   maxu = (GLfloat) (srcrect->x + srcrect->w) / srcrect->w;
+   minv = (GLfloat) srcrect->y / srcrect->h;
+   maxv = (GLfloat) (srcrect->y + srcrect->h) / srcrect->h;
+
    minu *= texw;
-   maxu = (GLfloat) (dstrect->x + w) / w;
    maxu *= texw;
-   minv = (GLfloat) dstrect->y / h;
    minv *= texh;
-   maxv = (GLfloat) (dstrect->y + h) / h;
    maxv *= texh;
    
    struct VertexDataFormat vData[ 4 ];
@@ -524,30 +557,33 @@ int CORE_RenderCopy_0(SDL_Renderer * renderer, SDL_Texture * texture,
 static SDL_Texture *VIDEO_CreateTexture(int width, int height)
 {
 	int texture_width, texture_height;
-	float ratio = (float)width / (float)height;
-	ratio *= 1.6f * (float)gConfig.dwAspectY / (float)gConfig.dwAspectX;
+    double ratio = (float)width / (float)height;
+    ratio *= 1.6f * (float)gConfig.dwTextureHeight / (float)gConfig.dwTextureWidth;
+    double ratioV;
    
 #if PAL_HAS_GLSL
-   gOrthoMatrixes[0] = GLKMatrix4MakeOrtho(0, width, height, 0,  -1, 1);
-   gOrthoMatrixes[1] = GLKMatrix4MakeOrtho(0, width, height, 0,  -1, 1);
+   gOrthoMatrixes[0] = GLKMatrix4MakeOrtho(0, width, height, 0, -1, 1);
+   gOrthoMatrixes[1] = GLKMatrix4MakeOrtho(0, width, height, 0, -1, 1);
    gOrthoMatrixes[2] = GLKMatrix4MakeOrtho(0, width, 0, height, -1, 1);
 #endif
 	//
 	// Check whether to keep the aspect ratio
 	//
-	if (gConfig.fKeepAspectRatio && fabs(ratio - 1.6f) > DBL_EPSILON)
+	if (gConfig.fKeepAspectRatio && fabs(ratio - 1.6f) > FLT_EPSILON)
 	{
 		if (ratio > 1.6f)
 		{
 			texture_height = 200;
 			texture_width = (int)(200 * ratio) & ~0x3;
 			ratio = (float)height / 200.0f;
+            ratioV = (float)height / gConfig.dwTextureHeight;
 		}
 		else
 		{
 			texture_width = 320;
 			texture_height = (int)(320 / ratio) & ~0x3;
 			ratio = (float)width / 320.0f;
+            ratioV = (float)width / gConfig.dwTextureWidth;
 		}
 
 		WORD w = (WORD)(ratio * 320.0f) & ~0x3;
@@ -559,6 +595,12 @@ static SDL_Texture *VIDEO_CreateTexture(int width, int height)
 		gTextureRect.x = (texture_width - 320) / 2;
 		gTextureRect.y = (texture_height - 200) / 2;
 		gTextureRect.w = 320; gTextureRect.h = 200;
+       
+        w = (WORD)(ratioV * gConfig.dwTextureWidth) & ~0x3;
+        h = (WORD)(ratioV * gConfig.dwTextureHeight) & ~0x3;
+        gGLTextureRect.x = (width - w) / 2;
+        gGLTextureRect.y = (height - h) / 2;
+        gGLTextureRect.w = w; gGLTextureRect.h = h;
 #if PAL_HAS_TOUCH
 		PAL_SetTouchBounds(width, height, gOverlayRect);
 #endif
@@ -572,6 +614,9 @@ static SDL_Texture *VIDEO_CreateTexture(int width, int height)
 		gOverlayRect.h = height;
 		gTextureRect.x = gTextureRect.y = 0;
 		gTextureRect.w = 320; gTextureRect.h = 200;
+       
+        gGLTextureRect.x = gGLTextureRect.y = 0;
+        gGLTextureRect.w = width; gGLTextureRect.h = height;
 	}
 
 	//
@@ -602,7 +647,6 @@ VIDEO_Startup(
 --*/
 {
 #if SDL_VERSION_ATLEAST(2,0,0)
-   int render_w, render_h;
    
 #if !GLES
 #  if PAL_HAS_GLSL
@@ -621,7 +665,7 @@ VIDEO_Startup(
    // Before we can render anything, we need a window and a renderer.
    //
    gpWindow = SDL_CreateWindow("Pal", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-                               gConfig.dwScreenWidth, gConfig.dwScreenHeight, PAL_VIDEO_INIT_FLAGS | (gConfig.fFullScreen ? SDL_WINDOW_BORDERLESS : 0) | SDL_WINDOW_OPENGL);
+                               gConfig.dwScreenWidth, gConfig.dwScreenHeight, PAL_VIDEO_INIT_FLAGS | (gConfig.fFullScreen ? SDL_WINDOW_BORDERLESS : 0) );
    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, gConfig.pszScaleQuality);
 
    if (gpWindow == NULL)
@@ -630,10 +674,10 @@ VIDEO_Startup(
    }
 
    gpRenderer = SDL_CreateRenderer(gpWindow, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-   SDL_GetRendererOutputSize(gpRenderer, &render_w, &render_h);
+   SDL_GetRendererOutputSize(gpRenderer, &gRendererWidth, &gRendererHeight);
 #  if PAL_HAS_GLSL
    if( gConfig.fEnableGLSL) {
-      gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, render_w, render_h);
+      gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, gConfig.dwTextureWidth, gConfig.dwTextureHeight);
       SDL_RendererInfo rendererInfo;
       SDL_GetRendererInfo(gpRenderer, &rendererInfo);
       
@@ -675,7 +719,7 @@ VIDEO_Startup(
       glBindVertexArray(gVAOIds[0]);
       
       UTIL_LogSetPrelude("[PASS 1] ");
-      gProgramIds[0] = compileProgram(gConfig.pszVertexShader,gConfig.pszFragmentShader, 0);
+      gProgramIds[0] = compileProgram(gConfig.pszShader,gConfig.pszShader, 0);
       
       //Create VBO
       glGenBuffers( 3, gVBOIds );
@@ -694,7 +738,7 @@ VIDEO_Startup(
       glBufferData( GL_ARRAY_BUFFER, 4 * sizeof(struct VertexDataFormat), vData, GL_DYNAMIC_DRAW );
       glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, ebo );
       UTIL_LogSetPrelude("[PASS 2] ");
-      gProgramIds[1] = compileProgram(plain_glsl_vert, plain_glsl_frag, 1);
+      gProgramIds[1] = compileProgram(plain_glsl_vert, plain_glsl_frag_overlay, 1);
       setupShaderParams(1);
       
       glBindVertexArray(gVAOIds[2]);
@@ -732,7 +776,7 @@ VIDEO_Startup(
    //
    // Create texture for screen.
    //
-   gpTexture = VIDEO_CreateTexture(render_w, render_h);
+   gpTexture = VIDEO_CreateTexture(gRendererWidth, gRendererHeight);
 
    //
    // Create palette object
@@ -757,6 +801,7 @@ VIDEO_Startup(
       extern int PAL_OverlayBMPLength();
 
       SDL_Surface *overlay = SDL_LoadBMP_RW(SDL_RWFromConstMem(PAL_LoadOverlayBMP(), PAL_OverlayBMPLength()), 1);
+      SDL_SaveBMP(overlay, PAL_CombinePath(0, gConfig.pszSavePath, "overlay.bmp"));
       if (overlay != NULL)
       {
          SDL_SetColorKey(overlay, SDL_RLEACCEL, SDL_MapRGB(overlay->format, 255, 0, 255));
@@ -908,6 +953,27 @@ VIDEO_RenderCopy(
    VOID
 )
 {
+#if PAL_HAS_GLSL
+   if( gConfig.fEnableGLSL) {
+      if( gConfig.fEnableGLSL) {
+         SDL_SetRenderTarget(gpRenderer, gpBackBuffer);
+         SDL_RenderClear(gpRenderer);
+      }
+      SDL_Texture *screenTexture = SDL_CreateTextureFromSurface(gpRenderer, gpScreenReal);
+      VIDEO_RenderTexture(gpRenderer, screenTexture, NULL, &gGLTextureRect, 0);
+      SDL_SetRenderTarget(gpRenderer, NULL);
+      SDL_RenderClear(gpRenderer);
+      
+      VIDEO_RenderTexture(gpRenderer, gpBackBuffer, NULL, NULL, 2);
+      if (gpTouchOverlay)
+      {
+         glEnable(GL_BLEND);
+         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+         VIDEO_RenderTexture(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect, 1);
+      }
+      SDL_GL_SwapWindow(gpWindow);
+   }else{
+#endif
 	void *texture_pixels;
 	int texture_pitch;
 
@@ -925,29 +991,8 @@ VIDEO_RenderCopy(
 	}
 	memset(pixels, 0, gTextureRect.y * texture_pitch);
 	SDL_UnlockTexture(gpTexture);
-   
-#if PAL_HAS_GLSL
-   if( gConfig.fEnableGLSL) {
-      SDL_SetRenderTarget(gpRenderer, gpBackBuffer);
-      SDL_RenderClear(gpRenderer);
-   }
-#endif
-   SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
-#if PAL_HAS_GLSL
-   if( gConfig.fEnableGLSL) {
-       if (gpTouchOverlay)
-       {
-           glEnable(GL_BLEND);
-           glBlendFunc(GL_SRC_ALPHA,GL_ONE);
-           VIDEO_RenderTexture(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect, 1);
-       }
-       SDL_SetRenderTarget(gpRenderer, NULL);
-       SDL_RenderClear(gpRenderer);
-       
-       VIDEO_RenderTexture(gpRenderer, gpBackBuffer, NULL, NULL, 2);
-       SDL_GL_SwapWindow(gpWindow);
-    }else
-#endif //PAL_HAS_GLSL
+
+    SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
     {
        if (gpTouchOverlay)
        {
@@ -955,6 +1000,9 @@ VIDEO_RenderCopy(
        }
        SDL_RenderPresent(gpRenderer);
     }
+#if PAL_HAS_GLSL
+    }
+#endif
 }
 #endif //SDL2
 
@@ -1169,6 +1217,8 @@ VIDEO_Resize(
 --*/
 {
 #if SDL_VERSION_ATLEAST(2,0,0)
+   gRendererWidth = w;
+   gRendererHeight = h;
    SDL_Rect rect;
 
    if (gpTexture)

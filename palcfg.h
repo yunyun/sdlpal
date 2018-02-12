@@ -67,6 +67,8 @@ typedef enum tagPALCFG_ITEM
 	PALCFG_SOUNDVOLUME,
 	PALCFG_WINDOWHEIGHT,
 	PALCFG_WINDOWWIDTH,
+    PALCFG_TEXTUREHEIGHT,
+    PALCFG_TEXTUREWIDTH,
 	/* Unsigneds */
 	PALCFG_UNSIGNED_MAX,
 
@@ -83,9 +85,7 @@ typedef enum tagPALCFG_ITEM
 	PALCFG_RIXEXTRAINIT,
 	PALCFG_MIDICLIENT,
 	PALCFG_SCALEQUALITY,
-	PALCFG_ASPECTRATIO,
-	PALCFG_VERTEXSHADER,
-	PALCFG_FRAGMENTSHADER,
+	PALCFG_SHADER,
 	/* Strings */
 	PALCFG_STRING_MAX,
 
@@ -175,13 +175,12 @@ typedef struct tagCONFIGURATION
 	char            *pszMIDIClient;
 	char            *pszLogFile;
 	char            *pszScaleQuality;
-	char            *pszVertexShader;
-	char            *pszFragmentShader;
+	char            *pszShader;
 	DWORD            dwWordLength;
 	DWORD            dwScreenWidth;
 	DWORD            dwScreenHeight;
-    DWORD            dwAspectX;
-    DWORD            dwAspectY;
+    DWORD            dwTextureWidth;
+    DWORD            dwTextureHeight;
 	INT              iSurroundOPLOffset;
 	INT              iAudioChannels;
 	INT              iSampleRate;
