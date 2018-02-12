@@ -196,12 +196,7 @@ void main(){
     vec2 pos=Warp(v_texCoord);
     vec4 fragColor;
     fragColor.rgb=Tri(pos)*Mask(v_fragCoord.xy);
-    fragColor.rgb=ToSrgb(fragColor.rgb);
-#ifdef GL_ES
-    FragColor=vec4(fragColor.bgr, 1.0);
-#else
-    FragColor=vec4(fragColor.rgb, 1.0);
-#endif
+    FragColor=vec4(ToSrgb(fragColor.rgb),1.0);
 }
 
 #endif

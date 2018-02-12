@@ -51,17 +51,16 @@ static BOOL bScaleScreen = PAL_SCALE_SCREEN;
 static WORD               g_wShakeTime       = 0;
 static WORD               g_wShakeLevel      = 0;
 
-#define FORCE_OPENGL_CORE_PROFILE 1
+//#define FORCE_OPENGL_CORE_PROFILE 1
 
 #if PAL_HAS_GLSL
-static uint32_t gProgramId;
-static uint32_t gVAOId; // 0 for whole screen; 1 for touch overlay
-//static uint32_t gVBOIds[2];
+static uint32_t gProgramIds[]={-1,-1,-1};
+static uint32_t gVAOIds[3]; // 0 for game screen; 1 for touch overlay; 2 for final blit
+static uint32_t gVBOIds[3];
 //static uint32_t gIBOId;
-static int gMVPSlot, gTextureSizeSlot;
+static int gMVPSlots[3], gTextureSizeSlots[3];
 static int glversion_major, glversion_minor;
 static SDL_Texture *gpBackBuffer;
-static int is_SHITEL = 0;
 
 #if __IOS__
 #include <SDL_opengles.h>
@@ -203,7 +202,7 @@ union _GLKMatrix4
 #pragma pack(pop)
 typedef union _GLKMatrix4 GLKMatrix4;
 
-static GLKMatrix4 gOrthoMat;
+static GLKMatrix4 gOrthoMatrixes[3];
 
 GLKMatrix4 GLKMatrix4MakeOrtho(float left, float right,
                                           float bottom, float top,
@@ -223,16 +222,93 @@ GLKMatrix4 GLKMatrix4MakeOrtho(float left, float right,
     
     return m;
 }
+
+
+static char *plain_glsl_vert = "\r\n\
+#if __VERSION__ >= 130              \r\n\
+#define COMPAT_VARYING out          \r\n\
+#define COMPAT_ATTRIBUTE in         \r\n\
+#define COMPAT_TEXTURE texture      \r\n\
+#else                               \r\n\
+#define COMPAT_VARYING varying      \r\n\
+#define COMPAT_ATTRIBUTE attribute  \r\n\
+#define COMPAT_TEXTURE texture2D    \r\n\
+#endif                              \r\n\
+#ifdef GL_ES                        \r\n\
+#define COMPAT_PRECISION mediump    \r\n\
+#else                               \r\n\
+#define COMPAT_PRECISION            \r\n\
+#endif                              \r\n\
+uniform mat4 MVPMatrix;             \r\n\
+COMPAT_ATTRIBUTE vec4 VertexCoord;  \r\n\
+COMPAT_ATTRIBUTE vec4 TexCoord;     \r\n\
+COMPAT_VARYING vec2 v_texCoord;     \r\n\
+void main()                         \r\n\
+{                                   \r\n\
+gl_Position = MVPMatrix * VertexCoord; \r\n\
+v_texCoord = TexCoord.xy;              \r\n\
+}";
+static char *plain_glsl_frag = "\r\n\
+#if __VERSION__ >= 130              \r\n\
+#define COMPAT_VARYING in           \r\n\
+#define COMPAT_TEXTURE texture      \r\n\
+out vec4 FragColor;                 \r\n\
+#else                               \r\n\
+#define COMPAT_VARYING varying      \r\n\
+#define FragColor gl_FragColor      \r\n\
+#define COMPAT_TEXTURE texture2D    \r\n\
+#endif                              \r\n\
+#ifdef GL_ES                        \r\n\
+#ifdef GL_FRAGMENT_PRECISION_HIGH   \r\n\
+precision highp float;              \r\n\
+#else                               \r\n\
+precision mediump float;            \r\n\
+#endif                              \r\n\
+#define COMPAT_PRECISION mediump    \r\n\
+#else                               \r\n\
+#define COMPAT_PRECISION            \r\n\
+#endif                              \r\n\
+COMPAT_VARYING vec2 v_texCoord;     \r\n\
+uniform sampler2D tex0;             \r\n\
+void main()                         \r\n\
+{                                   \r\n\
+FragColor = vec4(COMPAT_TEXTURE(tex0 , v_texCoord.xy).rgb, 1.0);  \r\n\
+#ifdef GL_ES                        \r\n\
+FragColor.rgb = FragColor.bgr;   \r\n\
+#endif                              \r\n\
+}";
+
+char *readShaderFile(const char *fileName, GLuint type) {
+   FILE *fp = UTIL_OpenRequiredFile(fileName);
+   fseek(fp,0,SEEK_END);
+   long filesize = ftell(fp);
+   char *buf = (char*)malloc(filesize+1);
+   fseek(fp,0,SEEK_SET);
+   fread(buf,filesize,1,fp);
+   buf[filesize]='\0';
+   return buf;
+}
+
+GLuint compileShader(const char* sourceOrFilename, GLuint shaderType, int is_source) {
 //DONT CHANGE
 #define SHADER_TYPE(shaderType) (shaderType == GL_VERTEX_SHADER ? "VERTEX" : "FRAGMENT")
-char *readShaderFile(const char *fileName, GLuint type);
-GLuint compileShader(const char* fileName, GLuint shaderType) {
-   UTIL_LogOutput(LOGLEVEL_DEBUG, "compiling %s shader %s", SHADER_TYPE(shaderType), fileName );
-    char *source = readShaderFile(fileName, shaderType);
+    char shaderBuffer[65536];
+    const char *pBuf = shaderBuffer;
+    memset(shaderBuffer,0,sizeof(shaderBuffer));
+    const char *source = sourceOrFilename;
+    if(!is_source)
+        source = readShaderFile(sourceOrFilename, shaderType);
+#if !GLES
+    sprintf(shaderBuffer,"%s\r\n",glversion_major>3 ? "#version 330" : "#version 110");
+#endif
+    sprintf(shaderBuffer+strlen(shaderBuffer),"#define %s\r\n%s\r\n",SHADER_TYPE(shaderType),source);
+    if(!is_source)
+        free((void*)source);
+   
     // Create ID for shader
     GLuint result = glCreateShader(shaderType);
     // Define shader text
-    glShaderSource(result, 1, &source, NULL);
+    glShaderSource(result, 1, &pBuf, NULL);
     // Compile shader
     glCompileShader(result);
     
@@ -246,36 +322,24 @@ GLuint compileShader(const char* fileName, GLuint shaderType) {
         {
             GLchar *log = (GLchar*)malloc(logLength);
             glGetShaderInfoLog(result, logLength, &logLength, log);
-            UTIL_LogOutput(LOGLEVEL_DEBUG, "shader compilation error:%s\r\n",log);
+            UTIL_LogOutput(LOGLEVEL_DEBUG, "shader %s compilation error:%s", is_source ? "stock" : sourceOrFilename,log);
             free(log);
         }
         glDeleteShader(result);
         result = 0;
     }else
-       UTIL_LogOutput(LOGLEVEL_DEBUG, "%s shader compilation finished success!", shaderType == GL_VERTEX_SHADER ? "Vertex" : "Fragment" );
+       UTIL_LogOutput(LOGLEVEL_DEBUG, "%s shader %s compilation succeed!", SHADER_TYPE(shaderType), is_source ? "stock" : sourceOrFilename );
     return result;
 }
 
-char g_ShaderBuffer[65536];
-char *readShaderFile(const char *fileName, GLuint type) {
-    memset(g_ShaderBuffer,0,sizeof(g_ShaderBuffer));
-    FILE *fp = UTIL_OpenRequiredFile(fileName);
-#if !GLES
-    sprintf(g_ShaderBuffer,"%s\r\n",glversion_major>3 ? "#version 330" : "#version 110");
-#endif
-    sprintf(g_ShaderBuffer,"%s#define %s\r\n",g_ShaderBuffer,SHADER_TYPE(type));
-    fread(g_ShaderBuffer+strlen(g_ShaderBuffer),1,sizeof(g_ShaderBuffer),fp);
-    return g_ShaderBuffer;
-}
-
-GLuint compileProgram(const char* vtxFile, const char* fragFile) {
+GLuint compileProgram(const char* vtx, const char* frag,int is_source) {
     GLuint programId = 0;
     GLuint vtxShaderId, fragShaderId;
     programId = glCreateProgram();
     
-    vtxShaderId = compileShader(vtxFile, GL_VERTEX_SHADER);
+    vtxShaderId = compileShader(vtx, GL_VERTEX_SHADER, is_source);
     
-    fragShaderId = compileShader(fragFile, GL_FRAGMENT_SHADER);
+    fragShaderId = compileShader(frag, GL_FRAGMENT_SHADER, is_source);
     
     if(vtxShaderId && fragShaderId) {
         // Associate shader with program
@@ -291,10 +355,10 @@ GLuint compileProgram(const char* vtxFile, const char* fragFile) {
             char* log = (char*) malloc(logLen * sizeof(char));
             // Show any errors as appropriate
             glGetProgramInfoLog(programId, logLen, &logLen, log);
-            UTIL_LogOutput(LOGLEVEL_DEBUG, "shader linkage error:%s\r\n",log);
+            UTIL_LogOutput(LOGLEVEL_DEBUG, "shader linkage error:%s",log);
             free(log);
         }else
-           UTIL_LogOutput(LOGLEVEL_DEBUG, "shaders linkage finished success!");
+           UTIL_LogOutput(LOGLEVEL_DEBUG, "shaders linkage succeed!");
     }
     if(vtxShaderId) {
         glDeleteShader(vtxShaderId);
@@ -305,15 +369,54 @@ GLuint compileProgram(const char* vtxFile, const char* fragFile) {
     return programId;
 }
 
-void VAO_Draw(SDL_Renderer * renderer, SDL_Texture * texture, const SDL_Rect * srcrect, const SDL_Rect * dstrect, int vaoId)
+void setupShaderParams(int pass){
+   int slot = glGetAttribLocation(gProgramIds[pass], "VertexCoord");
+   if(slot >= 0) {
+      glEnableVertexAttribArray(slot);
+      glVertexAttribPointer(slot, 4, GL_FLOAT, GL_FALSE, sizeof(struct VertexDataFormat), (GLvoid*)offsetof(struct VertexDataFormat, position));
+   }else{
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "attrib VertexCoord not exist");
+   }
+   
+   slot = glGetAttribLocation(gProgramIds[pass], "TexCoord");
+   if(slot >= 0) {
+      glEnableVertexAttribArray(slot);
+      glVertexAttribPointer(slot, 4, GL_FLOAT, GL_FALSE, sizeof(struct VertexDataFormat), (GLvoid*)offsetof(struct VertexDataFormat, texCoord));
+   }else{
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "attrib TexCoord not exist");
+   }
+   
+   gMVPSlots[pass] = glGetUniformLocation(gProgramIds[pass], "MVPMatrix");
+   if(gMVPSlots[pass] < 0)
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "uniform MVPMatrix not exist");
+   
+   gTextureSizeSlots[pass] = glGetUniformLocation(gProgramIds[pass], "TextureSize");
+   if(gTextureSizeSlots[pass] < 0)
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "uniform TextureSize not exist");
+}
+
+void VIDEO_RenderTexture(SDL_Renderer * renderer, SDL_Texture * texture, const SDL_Rect * srcrect, const SDL_Rect * dstrect, int pass)
 {
+   GLint oldProgramId;
    GLfloat minx, miny, maxx, maxy;
    GLfloat minu, maxu, minv, maxv;
    
-//   glEnable(GL_TEXTURE_2D);
-   SDL_GL_BindTexture(texture, NULL, NULL);
-//   glColor4f(1.0,1.0,1.0,1.0);
-//   glDisable(GL_BLEND);
+   GLfloat texw;
+   GLfloat texh;
+   SDL_GL_BindTexture(texture, &texw, &texh);
+
+   if(gProgramIds[pass] != -1) {
+      glGetIntegerv(GL_CURRENT_PROGRAM,&oldProgramId);
+      glUseProgram(gProgramIds[pass]);
+   }
+   
+   // Setup MVP projection matrix uniform
+   glUniformMatrix4fv(gMVPSlots[pass], 1, GL_FALSE, gOrthoMatrixes[pass].m);
+   
+   GLfloat textureSize[2];
+   textureSize[0] = 320.0;
+   textureSize[1] = 200.0;
+   glUniform2fv(gTextureSizeSlots[pass], 1, textureSize);
    
    SDL_Rect _srcrect,_dstrect;
    
@@ -343,14 +446,14 @@ void VAO_Draw(SDL_Renderer * renderer, SDL_Texture * texture, const SDL_Rect * s
    maxx = dstrect->x + dstrect->w;
    maxy = dstrect->y + dstrect->h;
    
-   minu = (GLfloat) srcrect->x / w;
-   //   minu *= texturedata->texw;
-   maxu = (GLfloat) (srcrect->x + w) / w / (is_SHITEL ? 1.6 : 1);
-   //   maxu *= texturedata->texw;
-   minv = (GLfloat) srcrect->y / h;
-   //   minv *= texturedata->texh;
-   maxv = (GLfloat) (srcrect->y + h) / h / (is_SHITEL ? 1.28 : 1);
-   //   maxv *= texturedata->texh;
+   minu = (GLfloat) dstrect->x / w;
+   minu *= texw;
+   maxu = (GLfloat) (dstrect->x + w) / w;
+   maxu *= texw;
+   minv = (GLfloat) dstrect->y / h;
+   minv *= texh;
+   maxv = (GLfloat) (dstrect->y + h) / h;
+   maxv *= texh;
    
    struct VertexDataFormat vData[ 4 ];
    
@@ -366,10 +469,10 @@ void VAO_Draw(SDL_Renderer * renderer, SDL_Texture * texture, const SDL_Rect * s
    vData[ 2 ].position.x = maxx; vData[ 2 ].position.y = maxy; vData[ 2 ].position.z = 0.0; vData[ 2 ].position.w = 1.0;
    vData[ 3 ].position.x = minx; vData[ 3 ].position.y = maxy; vData[ 3 ].position.z = 0.0; vData[ 3 ].position.w = 1.0;
    
-   glBindVertexArray(gVAOId);
+   glBindVertexArray(gVAOIds[pass]);
    
    //Update vertex buffer data
-//   glBindBuffer( GL_ARRAY_BUFFER, gVBOIds[vaoId] );
+   glBindBuffer( GL_ARRAY_BUFFER, gVBOIds[pass] );
    glBufferSubData( GL_ARRAY_BUFFER, 0, 4 * sizeof(struct VertexDataFormat), vData );
    
    //Draw quad using vertex data and index data
@@ -377,37 +480,11 @@ void VAO_Draw(SDL_Renderer * renderer, SDL_Texture * texture, const SDL_Rect * s
    //    glDrawArrays(GL_QUADS, 0,4);
    
    glBindVertexArray(0);
-}
-
-void presentBackBuffer(SDL_Renderer * renderer, SDL_Texture* backBuffer) {
-   GLint oldProgramId;
-
-   //Detach the texture
-   SDL_SetRenderTarget(renderer, NULL);
-   SDL_RenderClear(renderer);
-   
-   SDL_GL_BindTexture(backBuffer, NULL, NULL);
-   if(gProgramId != 0) {
-      glGetIntegerv(GL_CURRENT_PROGRAM,&oldProgramId);
-      glUseProgram(gProgramId);
-   }
-
-   // Setup MVP projection matrix uniform
-   glUniformMatrix4fv(gMVPSlot, 1, GL_FALSE, gOrthoMat.m);
-   
-   GLfloat textureSize[2];
-   textureSize[0] = 320.0;
-   textureSize[1] = 200.0;
-   glUniform2fv(gTextureSizeSlot, 1, textureSize);
-
-   VAO_Draw(gpRenderer, backBuffer, NULL,NULL,0);
-   
-   if(gProgramId != 0) {
+   if(gProgramIds[pass] != -1) {
       glUseProgram(oldProgramId);
    }
 }
 
-#if FORCE_OPENGL_CORE_PROFILE
 //remove all fixed pipeline call in RenderCopy
 
 int CORE_SetupCopy(SDL_Renderer * renderer, SDL_Texture * texture)
@@ -421,20 +498,24 @@ int orig_SDL_RenderCopy(SDL_Renderer * renderer, SDL_Texture * texture,
 {
    return SDL_RenderCopy(renderer, texture, srcrect, dstrect);
 }
-#define SDL_RenderCopy CORE_RenderCopy
+#define SDL_RenderCopy CORE_RenderCopy_0
 int CORE_RenderCopy(SDL_Renderer * renderer, SDL_Texture * texture,
-                    const SDL_Rect * srcrect, const SDL_Rect * dstrect)
+                    const SDL_Rect * srcrect, const SDL_Rect * dstrect, int pass)
 {
-#if FORCE_OPENGL_CORE_PROFILE
+#if FORCE_OPENGL_CORE_PROFILE || GLES || TARGET_OS_MAC
    if(!gConfig.fEnableGLSL)
 #endif
       return orig_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
 
-   VAO_Draw(renderer, texture, srcrect, dstrect, 1);
+   VIDEO_RenderTexture(renderer, texture, srcrect, dstrect, pass);
    
    return 0;//GL_CheckError("", renderer);
 }
-#endif //FORCE_OPENGL_CORE_PROFILE
+int CORE_RenderCopy_0(SDL_Renderer * renderer, SDL_Texture * texture,
+                      const SDL_Rect * srcrect, const SDL_Rect * dstrect)
+{
+   return CORE_RenderCopy(renderer, texture, srcrect, dstrect, 0);
+}
 
 #endif //PAL_HAS_GLSL
 
@@ -447,7 +528,9 @@ static SDL_Texture *VIDEO_CreateTexture(int width, int height)
 	ratio *= 1.6f * (float)gConfig.dwAspectY / (float)gConfig.dwAspectX;
    
 #if PAL_HAS_GLSL
-    gOrthoMat = GLKMatrix4MakeOrtho(0, width,height, 0,  -1, 1);
+   gOrthoMatrixes[0] = GLKMatrix4MakeOrtho(0, width, height, 0,  -1, 1);
+   gOrthoMatrixes[1] = GLKMatrix4MakeOrtho(0, width, height, 0,  -1, 1);
+   gOrthoMatrixes[2] = GLKMatrix4MakeOrtho(0, width, 0, height, -1, 1);
 #endif
 	//
 	// Check whether to keep the aspect ratio
@@ -547,27 +630,28 @@ VIDEO_Startup(
    }
 
    gpRenderer = SDL_CreateRenderer(gpWindow, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+   SDL_GetRendererOutputSize(gpRenderer, &render_w, &render_h);
 #  if PAL_HAS_GLSL
    if( gConfig.fEnableGLSL) {
-      gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, gConfig.dwScreenWidth, gConfig.dwScreenHeight);
+      gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, render_w, render_h);
       SDL_RendererInfo rendererInfo;
       SDL_GetRendererInfo(gpRenderer, &rendererInfo);
       
-      UTIL_LogOutput(LOGLEVEL_DEBUG, "render info:%s\r\n",rendererInfo.name);
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "render info:%s",rendererInfo.name);
       if(!strncmp(rendererInfo.name, "opengl", 6)) {
 #     ifndef __APPLE__
          // If you want to use GLEW or some other GL extension handler, do it here!
          if (!initGLExtensions()) {
-            UTIL_LogOutput(LOGLEVEL_DEBUG,  "Couldn't init GL extensions!\r\n" );
+            UTIL_LogOutput(LOGLEVEL_DEBUG,  "Couldn't init GL extensions!" );
             SDL_Quit();
             exit(-1);
          }
 #     endif
       }
       char *glversion = (char*)glGetString(GL_VERSION);
-      UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_VERSION:%s\r\n",glversion);
-      UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_SHADING_LANGUAGE_VERSION:%s\r\n",glGetString(GL_SHADING_LANGUAGE_VERSION));
-      UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_RENDERER:%s\r\n",glGetString(GL_RENDERER));
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_VERSION:%s",glversion);
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_SHADING_LANGUAGE_VERSION:%s",glGetString(GL_SHADING_LANGUAGE_VERSION));
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_RENDERER:%s",glGetString(GL_RENDERER));
       SDL_sscanf(glversion, "%d.%d", &glversion_major, &glversion_minor);
       if( glversion_major >= 3 ) {
          GLint n, i;
@@ -576,27 +660,26 @@ VIDEO_Startup(
             UTIL_LogOutput(LOGLEVEL_DEBUG, "extension %d:%s\n", i, glGetStringi(GL_EXTENSIONS, i));
          }
       }else
-         UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_EXTENSIONS:%s\r\n",glGetString(GL_EXTENSIONS));
-#if FORCE_OPENGL_CORE_PROFILE
-       is_SHITEL = (strstr(glversion, "INTEL")!=NULL && strstr(glversion, "WebGL")==NULL);
-#endif
+         UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_EXTENSIONS:%s",glGetString(GL_EXTENSIONS));
 
       struct VertexDataFormat vData[ 4 ];
       GLuint iData[ 4 ];
-      GLuint vbo, ebo;
+      GLuint ebo;
       //Set rendering indices
       iData[ 0 ] = 0;
       iData[ 1 ] = 1;
       iData[ 2 ] = 3;
       iData[ 3 ] = 2;
       // Initialize vertex array object
-      glGenVertexArrays(1, &gVAOId);
-      glBindVertexArray(gVAOId);
-      gProgramId = compileProgram(gConfig.pszVertexShader,gConfig.pszFragmentShader);
+      glGenVertexArrays(3, gVAOIds);
+      glBindVertexArray(gVAOIds[0]);
+      
+      UTIL_LogSetPrelude("[PASS 1] ");
+      gProgramIds[0] = compileProgram(gConfig.pszVertexShader,gConfig.pszFragmentShader, 0);
       
       //Create VBO
-      glGenBuffers( 1, &vbo );
-      glBindBuffer( GL_ARRAY_BUFFER, vbo );
+      glGenBuffers( 3, gVBOIds );
+      glBindBuffer( GL_ARRAY_BUFFER, gVBOIds[0] );
       glBufferData( GL_ARRAY_BUFFER, 4 * sizeof(struct VertexDataFormat), vData, GL_DYNAMIC_DRAW );
       
       //Create IBO
@@ -604,34 +687,26 @@ VIDEO_Startup(
       glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, ebo );
       glBufferData( GL_ELEMENT_ARRAY_BUFFER, 4 * sizeof(GLuint), iData, GL_DYNAMIC_DRAW );
       
-      int slot = glGetAttribLocation(gProgramId, "VertexCoord");
-      if(slot >= 0) {
-         glEnableVertexAttribArray(slot);
-         glVertexAttribPointer(slot, 4, GL_FLOAT, GL_FALSE, sizeof(struct VertexDataFormat), (GLvoid*)offsetof(struct VertexDataFormat, position));
-      }else{
-         UTIL_LogOutput(LOGLEVEL_DEBUG, "attrib VertexCoord not exist\r\n");
-      }
+      setupShaderParams(0);
       
-      slot = glGetAttribLocation(gProgramId, "TexCoord");
-      if(slot >= 0) {
-         glEnableVertexAttribArray(slot);
-         glVertexAttribPointer(slot, 4, GL_FLOAT, GL_FALSE, sizeof(struct VertexDataFormat), (GLvoid*)offsetof(struct VertexDataFormat, texCoord));
-      }else{
-         UTIL_LogOutput(LOGLEVEL_DEBUG, "attrib TexCoord not exist\r\n");
-      }
+      glBindVertexArray(gVAOIds[1]);
+      glBindBuffer( GL_ARRAY_BUFFER, gVBOIds[1] );
+      glBufferData( GL_ARRAY_BUFFER, 4 * sizeof(struct VertexDataFormat), vData, GL_DYNAMIC_DRAW );
+      glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, ebo );
+      UTIL_LogSetPrelude("[PASS 2] ");
+      gProgramIds[1] = compileProgram(plain_glsl_vert, plain_glsl_frag, 1);
+      setupShaderParams(1);
       
-      gMVPSlot = glGetUniformLocation(gProgramId, "MVPMatrix");
-      if(gMVPSlot < 0)
-         UTIL_LogOutput(LOGLEVEL_DEBUG, "uniform MVPMatrix not exist\r\n");
+      glBindVertexArray(gVAOIds[2]);
+      glBindBuffer( GL_ARRAY_BUFFER, gVBOIds[2] );
+      glBufferData( GL_ARRAY_BUFFER, 4 * sizeof(struct VertexDataFormat), vData, GL_DYNAMIC_DRAW );
+      glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, ebo );
+      UTIL_LogSetPrelude("[PASS 3] ");
+      gProgramIds[2] = compileProgram(plain_glsl_vert, plain_glsl_frag, 1);
+      setupShaderParams(2);
 
-      gTextureSizeSlot = glGetUniformLocation(gProgramId, "TextureSize");
-      if(gTextureSizeSlot < 0)
-         UTIL_LogOutput(LOGLEVEL_DEBUG, "uniform TextureSize not exist\r\n");
+      UTIL_LogSetPrelude(NULL);
 
-#if !GLES
-      glBindFragDataLocation(gProgramId, 0, "FragColor");
-#endif
-      
       glBindVertexArray(0);
    }
 #  endif //PAL_HAS_GLSL
@@ -657,7 +732,6 @@ VIDEO_Startup(
    //
    // Create texture for screen.
    //
-   SDL_GetRendererOutputSize(gpRenderer, &render_w, &render_h);
    gpTexture = VIDEO_CreateTexture(render_w, render_h);
 
    //
@@ -851,40 +925,34 @@ VIDEO_RenderCopy(
 	}
 	memset(pixels, 0, gTextureRect.y * texture_pitch);
 	SDL_UnlockTexture(gpTexture);
-
-#if !GLES //INVALID_VALUE: bufferSubData: offset out of range
+   
 #if PAL_HAS_GLSL
-    if( gConfig.fEnableGLSL) {
-        SDL_SetRenderTarget(gpRenderer, gpBackBuffer);
-        SDL_RenderClear(gpRenderer);
-    }
-#endif
-   SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
-   if (gpTouchOverlay)
-   {
-      SDL_RenderCopy(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect);
+   if( gConfig.fEnableGLSL) {
+      SDL_SetRenderTarget(gpRenderer, gpBackBuffer);
+      SDL_RenderClear(gpRenderer);
    }
 #endif
+   SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
 #if PAL_HAS_GLSL
-    if( gConfig.fEnableGLSL) {
-       presentBackBuffer(gpRenderer,
-#if FORCE_OPENGL_CORE_PROFILE || GLES//need figure howto implement RTT in macOS Core Profile
-                         gpTexture
-#else
-                         gpBackBuffer
-#endif
-                         );
+   if( gConfig.fEnableGLSL) {
+       if (gpTouchOverlay)
+       {
+           glEnable(GL_BLEND);
+           glBlendFunc(GL_SRC_ALPHA,GL_ONE);
+           VIDEO_RenderTexture(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect, 1);
+       }
+       SDL_SetRenderTarget(gpRenderer, NULL);
+       SDL_RenderClear(gpRenderer);
+       
+       VIDEO_RenderTexture(gpRenderer, gpBackBuffer, NULL, NULL, 2);
        SDL_GL_SwapWindow(gpWindow);
     }else
-#endif
+#endif //PAL_HAS_GLSL
     {
-#if FORCE_OPENGL_CORE_PROFILE
-       SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
        if (gpTouchOverlay)
        {
           SDL_RenderCopy(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect);
        }
-#endif
        SDL_RenderPresent(gpRenderer);
     }
 }
@@ -1115,7 +1183,7 @@ VIDEO_Resize(
    {
       SDL_DestroyTexture(gpBackBuffer);
    }
-   gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_ARGB8888,                                                  SDL_TEXTUREACCESS_TARGET, w, h);
+   gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
 #endif
 
    if (gpTexture == NULL)

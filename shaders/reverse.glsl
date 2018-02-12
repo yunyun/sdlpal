@@ -54,11 +54,6 @@ uniform sampler2D tex0;
 
 void main()
 {
-	vec4 fragColor = vec4(1,1,1,1)-vec4(COMPAT_TEXTURE(tex0 , v_texCoord.xy).bgr, 0.0);
-#ifdef GL_ES
-    FragColor=vec4(fragColor.bgr, 1.0);
-#else
-    FragColor=vec4(fragColor.rgb, 1.0);
-#endif
+	FragColor = vec4(1,1,1,1)-vec4(COMPAT_TEXTURE(tex0 , v_texCoord.xy).rgb, 0.0);
 }
 #endif
