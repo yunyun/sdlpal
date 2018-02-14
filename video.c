@@ -696,6 +696,9 @@ VIDEO_Startup(
       UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_VERSION:%s",glversion);
       UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_SHADING_LANGUAGE_VERSION:%s",glGetString(GL_SHADING_LANGUAGE_VERSION));
       UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_RENDERER:%s",glGetString(GL_RENDERER));
+      GLint maxTextureSize;
+      glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_MAX_TEXTURE_SIZE:%d",maxTextureSize);
       SDL_sscanf(glversion, "%d.%d", &glversion_major, &glversion_minor);
       if( glversion_major >= 3 ) {
          GLint n, i;
@@ -1227,14 +1230,6 @@ VIDEO_Resize(
    }
 
    gpTexture = VIDEO_CreateTexture(w, h);
-   
-#if PAL_HAS_GLSL
-   if (gpBackBuffer)
-   {
-      SDL_DestroyTexture(gpBackBuffer);
-   }
-   gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w, h);
-#endif
 
    if (gpTexture == NULL)
    {
