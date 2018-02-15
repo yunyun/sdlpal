@@ -54,12 +54,13 @@ static BOOL bScaleScreen = PAL_SCALE_SCREEN;
 static WORD               g_wShakeTime       = 0;
 static WORD               g_wShakeLevel      = 0;
 
-//#define FORCE_OPENGL_CORE_PROFILE 1
+#define FORCE_OPENGL_CORE_PROFILE 1
 
 #if PAL_HAS_GLSL
 static uint32_t gProgramIds[]={-1,-1,-1};
 static uint32_t gVAOIds[3]; // 0 for game screen; 1 for touch overlay; 2 for final blit
 static uint32_t gVBOIds[3];
+static uint32_t gPassID = -1;
 //static uint32_t gIBOId;
 static int gMVPSlots[3], gTextureSizeSlots[3];
 static int glversion_major, glversion_minor;
@@ -430,7 +431,7 @@ void setupShaderParams(int pass){
       UTIL_LogOutput(LOGLEVEL_DEBUG, "uniform TextureSize not exist");
 }
 
-void VIDEO_RenderTexture(SDL_Renderer * renderer, SDL_Texture * texture, const SDL_Rect * srcrect, const SDL_Rect * dstrect, int pass)
+int VIDEO_RenderTexture(SDL_Renderer * renderer, SDL_Texture * texture, const SDL_Rect * srcrect, const SDL_Rect * dstrect, int pass)
 {
    GLint oldProgramId;
    GLfloat minx, miny, maxx, maxy;
@@ -516,6 +517,8 @@ void VIDEO_RenderTexture(SDL_Renderer * renderer, SDL_Texture * texture, const S
    if(gProgramIds[pass] != -1) {
       glUseProgram(oldProgramId);
    }
+   
+   return 0;
 }
 
 //remove all fixed pipeline call in RenderCopy
@@ -531,23 +534,16 @@ int orig_SDL_RenderCopy(SDL_Renderer * renderer, SDL_Texture * texture,
 {
    return SDL_RenderCopy(renderer, texture, srcrect, dstrect);
 }
-#define SDL_RenderCopy CORE_RenderCopy_0
+#define SDL_RenderCopy CORE_RenderCopy
 int CORE_RenderCopy(SDL_Renderer * renderer, SDL_Texture * texture,
-                    const SDL_Rect * srcrect, const SDL_Rect * dstrect, int pass)
+                    const SDL_Rect * srcrect, const SDL_Rect * dstrect)
 {
 #if FORCE_OPENGL_CORE_PROFILE || GLES || TARGET_OS_MAC
    if(!gConfig.fEnableGLSL)
 #endif
       return orig_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
 
-   VIDEO_RenderTexture(renderer, texture, srcrect, dstrect, pass);
-   
-   return 0;//GL_CheckError("", renderer);
-}
-int CORE_RenderCopy_0(SDL_Renderer * renderer, SDL_Texture * texture,
-                      const SDL_Rect * srcrect, const SDL_Rect * dstrect)
-{
-   return CORE_RenderCopy(renderer, texture, srcrect, dstrect, 0);
+   return VIDEO_RenderTexture(renderer, texture, srcrect, dstrect, gPassID);
 }
 
 #endif //PAL_HAS_GLSL
@@ -696,9 +692,13 @@ VIDEO_Startup(
       UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_VERSION:%s",glversion);
       UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_SHADING_LANGUAGE_VERSION:%s",glGetString(GL_SHADING_LANGUAGE_VERSION));
       UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_RENDERER:%s",glGetString(GL_RENDERER));
-      GLint maxTextureSize;
+      GLint maxTextureSize, maxDrawBuffers, maxColorAttachments;
       glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+      glGetIntegerv(GL_MAX_DRAW_BUFFERS, &maxDrawBuffers);
+      glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &maxColorAttachments);
       UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_MAX_TEXTURE_SIZE:%d",maxTextureSize);
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_MAX_DRAW_BUFFERS:%d",maxDrawBuffers);
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "GL_MAX_COLOR_ATTACHMENTS:%d",maxColorAttachments);
       SDL_sscanf(glversion, "%d.%d", &glversion_major, &glversion_minor);
       if( glversion_major >= 3 ) {
          GLint n, i;
@@ -763,10 +763,10 @@ VIDEO_Startup(
       return -1;
    }
 
-#  if defined (__IOS__)
+#if defined (__IOS__)
    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
    SDL_GL_SetAttribute(SDL_GL_RETAINED_BACKING, 1);
-#  endif
+#endif
 
    //
    // Create the screen buffer and the backup screen buffer.
@@ -804,7 +804,6 @@ VIDEO_Startup(
       extern int PAL_OverlayBMPLength();
 
       SDL_Surface *overlay = SDL_LoadBMP_RW(SDL_RWFromConstMem(PAL_LoadOverlayBMP(), PAL_OverlayBMPLength()), 1);
-      SDL_SaveBMP(overlay, PAL_CombinePath(0, gConfig.pszSavePath, "overlay.bmp"));
       if (overlay != NULL)
       {
          SDL_SetColorKey(overlay, SDL_RLEACCEL, SDL_MapRGB(overlay->format, 255, 0, 255));
@@ -949,7 +948,6 @@ VIDEO_Shutdown(
 }
 
 #if SDL_VERSION_ATLEAST(2,0,0)
-
 PAL_FORCE_INLINE
 VOID
 VIDEO_RenderCopy(
@@ -963,16 +961,20 @@ VIDEO_RenderCopy(
          SDL_RenderClear(gpRenderer);
       }
       SDL_Texture *screenTexture = SDL_CreateTextureFromSurface(gpRenderer, gpScreenReal);
-      VIDEO_RenderTexture(gpRenderer, screenTexture, NULL, &gGLTextureRect, 0);
+      gPassID = 0;
+      SDL_RenderCopy(gpRenderer, screenTexture, NULL, &gGLTextureRect);
+      SDL_DestroyTexture(screenTexture);
       SDL_SetRenderTarget(gpRenderer, NULL);
       SDL_RenderClear(gpRenderer);
       
-      VIDEO_RenderTexture(gpRenderer, gpBackBuffer, NULL, NULL, 2);
+      gPassID = 2;
+      SDL_RenderCopy(gpRenderer, gpBackBuffer, NULL, NULL);
       if (gpTouchOverlay)
       {
          glEnable(GL_BLEND);
          glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-         VIDEO_RenderTexture(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect, 1);
+         gPassID = 1;
+         SDL_RenderCopy(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect);
       }
       SDL_GL_SwapWindow(gpWindow);
    }else{
@@ -995,14 +997,12 @@ VIDEO_RenderCopy(
 	memset(pixels, 0, gTextureRect.y * texture_pitch);
 	SDL_UnlockTexture(gpTexture);
 
-    SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
-    {
-       if (gpTouchOverlay)
-       {
-          SDL_RenderCopy(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect);
-       }
-       SDL_RenderPresent(gpRenderer);
-    }
+	SDL_RenderCopy(gpRenderer, gpTexture, NULL, NULL);
+	if (gpTouchOverlay)
+	{
+		SDL_RenderCopy(gpRenderer, gpTouchOverlay, NULL, &gOverlayRect);
+	}
+	SDL_RenderPresent(gpRenderer);
 #if PAL_HAS_GLSL
     }
 #endif
