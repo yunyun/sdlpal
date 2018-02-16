@@ -80,7 +80,7 @@ static SDL_Texture *gpBackBuffer;
 #include <SDL_opengl.h>
 #endif
 
-#if __IOS__ || __ANDROID__ || __EMSCRIPTEN__
+#if __IOS__ || __ANDROID__ || __EMSCRIPTEN__ || __WINRT__
 #define GLES 1
 #undef FORCE_OPENGL_CORE_PROFILE
 #endif
@@ -644,25 +644,26 @@ VIDEO_Startup(
 {
 #if SDL_VERSION_ATLEAST(2,0,0)
    
-#if !GLES
-#  if PAL_HAS_GLSL
    if( gConfig.fEnableGLSL) {
+#if GLES
+   SDL_SetHint( SDL_HINT_RENDER_DRIVER, "opengles2");
+#else
+#  if PAL_HAS_GLSL
    SDL_SetHint( SDL_HINT_RENDER_DRIVER, "opengl");
 #     if FORCE_OPENGL_CORE_PROFILE
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 #     endif
-   }
 #  endif
 #endif
+   }
 
     //
    // Before we can render anything, we need a window and a renderer.
    //
    gpWindow = SDL_CreateWindow("Pal", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                                gConfig.dwScreenWidth, gConfig.dwScreenHeight, PAL_VIDEO_INIT_FLAGS | (gConfig.fFullScreen ? SDL_WINDOW_BORDERLESS : 0) );
-   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, gConfig.pszScaleQuality);
 
    if (gpWindow == NULL)
    {
@@ -673,7 +674,9 @@ VIDEO_Startup(
    SDL_GetRendererOutputSize(gpRenderer, &gRendererWidth, &gRendererHeight);
 #  if PAL_HAS_GLSL
    if( gConfig.fEnableGLSL) {
+      SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, gConfig.pszScaleQuality);
       gpBackBuffer = SDL_CreateTexture(gpRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, gConfig.dwTextureWidth, gConfig.dwTextureHeight);
+      SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
       SDL_RendererInfo rendererInfo;
       SDL_GetRendererInfo(gpRenderer, &rendererInfo);
       
@@ -755,10 +758,11 @@ VIDEO_Startup(
       UTIL_LogSetPrelude(NULL);
 
       glBindVertexArray(0);
-   }
+   }else
 #  endif //PAL_HAS_GLSL
+   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, gConfig.pszScaleQuality);
 
-    if (gpRenderer == NULL)
+   if (gpRenderer == NULL)
    {
       return -1;
    }
@@ -807,7 +811,9 @@ VIDEO_Startup(
       if (overlay != NULL)
       {
          SDL_SetColorKey(overlay, SDL_RLEACCEL, SDL_MapRGB(overlay->format, 255, 0, 255));
+         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, gConfig.pszScaleQuality);
          gpTouchOverlay = SDL_CreateTextureFromSurface(gpRenderer, overlay);
+         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
          SDL_SetTextureAlphaMod(gpTouchOverlay, 120);
          SDL_FreeSurface(overlay);
       }
