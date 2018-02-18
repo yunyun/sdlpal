@@ -46,7 +46,8 @@ typedef enum tagPALCFG_ITEM
 	PALCFG_ENABLEKEYREPEAT,
 	PALCFG_USETOUCHOVERLAY,
 	PALCFG_ENABLEAVIPLAY,
-	PALCFG_ENABLEGLSL,
+    PALCFG_ENABLEGLSL,
+    PALCFG_ENABLEHDR,
 	/* Booleans */
 	PALCFG_BOOLEAN_MAX,
 
@@ -204,6 +205,7 @@ typedef struct tagCONFIGURATION
 	BOOL             fUseTouchOverlay;
 	BOOL             fEnableAviPlay;
 	BOOL             fEnableGLSL;
+    BOOL             fEnableHDR;
 #if USE_RIX_EXTRA_INIT
 	uint32_t        *pExtraFMRegs;
 	uint8_t         *pExtraFMVals;

@@ -141,23 +141,6 @@
 		8D11072F0486CEB800E47090 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1058C7A1FEA54F0111CA2CBB /* Cocoa.framework */; };
 /* End PBXBuildFile section */
 
-/* Begin PBXBuildStyle section */
-		7111D5861F2D6258009312F0 /* Development */ = {
-			isa = PBXBuildStyle;
-			buildSettings = {
-				COPY_PHASE_STRIP = NO;
-			};
-			name = Development;
-		};
-		7111D5871F2D6258009312F0 /* Deployment */ = {
-			isa = PBXBuildStyle;
-			buildSettings = {
-				COPY_PHASE_STRIP = YES;
-			};
-			name = Deployment;
-		};
-/* End PBXBuildStyle section */
-
 /* Begin PBXCopyFilesBuildPhase section */
 		002F39FD09D0883400EBEB88 /* Copy Frameworks into .app bundle */ = {
 			isa = PBXCopyFilesBuildPhase;
@@ -640,16 +623,18 @@
 /* Begin PBXProject section */
 		29B97313FDCFA39411CA2CEA /* Project object */ = {
 			isa = PBXProject;
-			buildConfigurationList = C01FCF4E08A954540054247B /* Build configuration list for PBXProject "Pal_SDL12" */;
-			buildSettings = {
+			attributes = {
 			};
-			buildStyles = (
-				7111D5861F2D6258009312F0 /* Development */,
-				7111D5871F2D6258009312F0 /* Deployment */,
-			);
+			buildConfigurationList = C01FCF4E08A954540054247B /* Build configuration list for PBXProject "Pal_SDL12" */;
+			compatibilityVersion = "Xcode 2.4";
+			developmentRegion = en;
 			hasScannedForEncodings = 1;
+			knownRegions = (
+				en,
+			);
 			mainGroup = 29B97314FDCFA39411CA2CEA /* Pal */;
 			projectDirPath = "";
+			projectRoot = "";
 			targets = (
 				8D1107260486CEB800E47090 /* Pal */,
 			);
@@ -767,6 +752,7 @@
 				GCC_PREPROCESSOR_DEFINITIONS = (
 					"PAL_HAS_NATIVEMIDI=0",
 					"PAL_HAS_OGG=0",
+					"DEBUG=1",
 				);
 				INFOPLIST_FILE = Info.plist;
 				INSTALL_PATH = "$(HOME)/Applications";

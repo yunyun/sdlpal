@@ -41,6 +41,8 @@ static SDL_Rect           gTextureRect;
 static SDL_Rect           gGLTextureRect;
 int gRendererWidth;
 int gRendererHeight;
+#else
+#undef PAL_HAS_GLSL
 #endif
 
 // The real screen surface
@@ -54,7 +56,7 @@ static BOOL bScaleScreen = PAL_SCALE_SCREEN;
 static WORD               g_wShakeTime       = 0;
 static WORD               g_wShakeLevel      = 0;
 
-#define FORCE_OPENGL_CORE_PROFILE 1
+//#define FORCE_OPENGL_CORE_PROFILE 1
 
 #if PAL_HAS_GLSL
 static uint32_t gProgramIds[]={-1,-1,-1};
@@ -62,7 +64,7 @@ static uint32_t gVAOIds[3]; // 0 for game screen; 1 for touch overlay; 2 for fin
 static uint32_t gVBOIds[3];
 static uint32_t gPassID = -1;
 //static uint32_t gIBOId;
-static int gMVPSlots[3], gTextureSizeSlots[3];
+static int gMVPSlots[3], gTextureSizeSlots[3], gHDRSlot[3];
 static int glversion_major, glversion_minor;
 static SDL_Texture *gpBackBuffer;
 
@@ -113,6 +115,7 @@ PFNGLENABLEVERTEXATTRIBARRAYPROC glEnableVertexAttribArray;
 PFNGLVERTEXATTRIBPOINTERPROC glVertexAttribPointer;
 PFNGLUNIFORMMATRIX4FVPROC glUniformMatrix4fv;
 PFNGLUNIFORM2FVPROC glUniform2fv;
+PFNGLUNIFORM1IVPROC glUniform1iv;
 PFNGLGETUNIFORMLOCATIONPROC glGetUniformLocation;
 PFNGLBINDFRAGDATALOCATIONPROC glBindFragDataLocation;
 PFNGLGETSTRINGIPROC glGetStringi;
@@ -142,6 +145,7 @@ int initGLExtensions() {
 	glVertexAttribPointer = (PFNGLVERTEXATTRIBPOINTERPROC)SDL_GL_GetProcAddress("glVertexAttribPointer");
     glUniformMatrix4fv = (PFNGLUNIFORMMATRIX4FVPROC)SDL_GL_GetProcAddress("glUniformMatrix4fv");
     glUniform2fv = (PFNGLUNIFORM2FVPROC)SDL_GL_GetProcAddress("glUniform2fv");
+	glUniform1iv = (PFNGLUNIFORM1IVPROC)SDL_GL_GetProcAddress("glUniform1iv");
     glGetUniformLocation = (PFNGLGETUNIFORMLOCATIONPROC)SDL_GL_GetProcAddress("glGetUniformLocation");
 #if !GLES
     glBindFragDataLocation = (PFNGLBINDFRAGDATALOCATIONPROC)SDL_GL_GetProcAddress("glBindFragDataLocation") ;
@@ -274,12 +278,45 @@ precision mediump float;            \r\n\
 #endif                              \r\n\
 COMPAT_VARYING vec2 v_texCoord;     \r\n\
 uniform sampler2D tex0;             \r\n\
+uniform int HDR;					\r\n\
+vec3 ACESFilm(vec3 x)				\r\n\
+{									\r\n\
+	const float A = 2.51;			\r\n\
+	const float B = 0.03;			\r\n\
+	const float C = 2.43;			\r\n\
+	const float D = 0.59;			\r\n\
+	const float E = 0.14;			\r\n\
+	return (x * (A * x + B)) / (x * (C * x + D) + E); \r\n\
+}									\r\n\
+const float SRGB_ALPHA = 0.055;		\r\n\
+float linear_to_srgb(float channel) {\r\n\
+	if(channel <= 0.0031308)		\r\n\
+		return 12.92 * channel;		\r\n\
+	else							\r\n\
+		return (1.0 + SRGB_ALPHA) * pow(channel, 1.0/2.4) - SRGB_ALPHA;	\r\n\
+}									\r\n\
+vec3 rgb_to_srgb(vec3 rgb) {		\r\n\
+	return vec3(linear_to_srgb(rgb.r), linear_to_srgb(rgb.g), linear_to_srgb(rgb.b)	); \r\n\
+}									\r\n\
+float srgb_to_linear(float channel) {	\r\n\
+	if (channel <= 0.04045)				\r\n\
+		return channel / 12.92;			\r\n\
+	else								\r\n\
+		return pow((channel + SRGB_ALPHA) / (1.0 + SRGB_ALPHA), 2.4);	\r\n\
+}									\r\n\
+vec3 srgb_to_rgb(vec3 srgb) {		\r\n\
+	return vec3(srgb_to_linear(srgb.r),	srgb_to_linear(srgb.g),	srgb_to_linear(srgb.b));\r\n\
+}\r\n\
 void main()                         \r\n\
 {                                   \r\n\
-FragColor = vec4(COMPAT_TEXTURE(tex0 , v_texCoord.xy).rgb, 1.0);  \r\n\
+FragColor = vec4(srgb_to_rgb(COMPAT_TEXTURE(tex0 , v_texCoord.xy).rgb), 1.0);  \r\n\
 #ifdef GL_ES                        \r\n\
-FragColor.rgb = FragColor.bgr;   \r\n\
+FragColor.rgb = FragColor.bgr;   	\r\n\
 #endif                              \r\n\
+vec3 color = FragColor.rgb;			\r\n\
+if( HDR > 0 )						\r\n\
+	color = ACESFilm(FragColor.rgb);\r\n\
+FragColor.rgb=rgb_to_srgb(color); \r\n\
 }";
 static char *plain_glsl_frag_overlay = "\r\n\
 #if __VERSION__ >= 130              \r\n\
@@ -429,6 +466,10 @@ void setupShaderParams(int pass){
    gTextureSizeSlots[pass] = glGetUniformLocation(gProgramIds[pass], "TextureSize");
    if(gTextureSizeSlots[pass] < 0)
       UTIL_LogOutput(LOGLEVEL_DEBUG, "uniform TextureSize not exist");
+
+   gHDRSlot[pass] = glGetUniformLocation(gProgramIds[pass], "HDR");
+   if(gHDRSlot[pass] < 0)
+      UTIL_LogOutput(LOGLEVEL_DEBUG, "uniform HDR not exist");
 }
 
 int VIDEO_RenderTexture(SDL_Renderer * renderer, SDL_Texture * texture, const SDL_Rect * srcrect, const SDL_Rect * dstrect, int pass)
@@ -453,7 +494,10 @@ int VIDEO_RenderTexture(SDL_Renderer * renderer, SDL_Texture * texture, const SD
    textureSize[0] = 320.0;
    textureSize[1] = 200.0;
    glUniform2fv(gTextureSizeSlots[pass], 1, textureSize);
-   
+	
+   GLint HDR = gConfig.fEnableHDR;
+   glUniform1iv(gHDRSlot[pass], 1, &HDR);
+
    SDL_Rect _srcrect,_dstrect;
    
    int w, h;
@@ -538,9 +582,7 @@ int orig_SDL_RenderCopy(SDL_Renderer * renderer, SDL_Texture * texture,
 int CORE_RenderCopy(SDL_Renderer * renderer, SDL_Texture * texture,
                     const SDL_Rect * srcrect, const SDL_Rect * dstrect)
 {
-#if FORCE_OPENGL_CORE_PROFILE || GLES || TARGET_OS_MAC
    if(!gConfig.fEnableGLSL)
-#endif
       return orig_SDL_RenderCopy(renderer, texture, srcrect, dstrect);
 
    return VIDEO_RenderTexture(renderer, texture, srcrect, dstrect, gPassID);
@@ -962,10 +1004,8 @@ VIDEO_RenderCopy(
 {
 #if PAL_HAS_GLSL
    if( gConfig.fEnableGLSL) {
-      if( gConfig.fEnableGLSL) {
-         SDL_SetRenderTarget(gpRenderer, gpBackBuffer);
-         SDL_RenderClear(gpRenderer);
-      }
+      SDL_SetRenderTarget(gpRenderer, gpBackBuffer);
+      SDL_RenderClear(gpRenderer);
       SDL_Texture *screenTexture = SDL_CreateTextureFromSurface(gpRenderer, gpScreenReal);
       gPassID = 0;
       SDL_RenderCopy(gpRenderer, screenTexture, NULL, &gGLTextureRect);
